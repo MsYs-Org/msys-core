@@ -193,10 +193,23 @@ std::size_t current_rss_kib() {
     return 0U;
 }
 
+ComponentStatus component_status(
+    std::string id,
+    std::string lifecycle,
+    std::string restart,
+    std::string state) {
+    ComponentStatus result{};
+    result.id = std::move(id);
+    result.lifecycle = std::move(lifecycle);
+    result.restart = std::move(restart);
+    result.state = std::move(state);
+    return result;
+}
+
 struct FakeBackend final {
     std::vector<ComponentStatus> components{
-        {"org.msys.demo:app", "manual", "never", "stopped"},
-        {"org.msys.shell:main", "background", "on-failure", "ready"},
+        component_status("org.msys.demo:app", "manual", "never", "stopped"),
+        component_status("org.msys.shell:main", "background", "on-failure", "ready"),
     };
     bool allow{true};
     bool ready{false};
@@ -376,12 +389,11 @@ void test_protocol_close_and_backpressure() {
     Reactor reactor;
     FakeBackend backend;
     for (std::size_t index = 0U; index < 16U; ++index) {
-        backend.components.push_back(ComponentStatus{
+        backend.components.push_back(component_status(
             "org.msys.component.with-a-deliberately-long-name:" + std::to_string(index),
             "background",
             "on-failure",
-            "ready",
-        });
+            "ready"));
     }
     BrokerOptions options{temporary.path + "/runtime"};
     options.max_queued_bytes_per_session = 128U;

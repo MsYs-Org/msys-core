@@ -11,6 +11,7 @@
 #include <exception>
 #include <filesystem>
 #include <functional>
+#include <iostream>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -353,8 +354,7 @@ int main() {
         test_router_end_to_end();
         return 0;
     } catch (const std::exception& error) {
-        (void)::write(STDERR_FILENO, error.what(), std::char_traits<char>::length(error.what()));
-        (void)::write(STDERR_FILENO, "\n", 1U);
+        std::cerr << "native router integration tests: " << error.what() << '\n';
         return 1;
     }
 }
