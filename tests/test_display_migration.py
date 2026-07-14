@@ -28,6 +28,14 @@ CALLER = "org.example.apps:settings"
 EXPLICIT = "org.example.apps:legacy"
 
 
+class LiveProcess:
+    returncode = None
+
+    @staticmethod
+    def poll() -> None:
+        return None
+
+
 def component(
     key: str,
     *,
@@ -201,6 +209,97 @@ class DisplayMigrationTests(unittest.IsolatedAsyncioTestCase):
     def use_same_display(daemon: MigrationDaemon) -> None:
         daemon.components[NEW].env = {"DISPLAY_ID": ":24"}
         daemon.components[NEW].windowing["display"] = ":24"
+
+    @staticmethod
+    def fenced_start_daemon(
+        *,
+        ready: bool,
+        current_generation: bool = True,
+    ) -> tuple[Msysd, Instance]:
+        daemon = object.__new__(Msysd)
+        policy = component(POLICY)
+        policy.provides = [
+            Provide("role", "window-manager", exclusive=True, priority=100)
+        ]
+        generation = 7
+        instance = Instance(
+            component=policy,
+            generation=generation,
+            process=LiveProcess(),  # type: ignore[arg-type]
+            state="ready" if ready else "handshaking",
+            ready=ready,
+        )
+        daemon.components = {POLICY: policy}
+        daemon.instances = {POLICY: instance}
+        daemon.generations = {
+            POLICY: generation if current_generation else generation + 1
+        }
+        daemon.profile = {
+            "roles": {"window-manager": [POLICY]},
+            "startup": [POLICY],
+            "env": {},
+        }
+        daemon.role_registry = RoleRegistry.from_profile(
+            daemon.components,
+            daemon.profile,
+        )
+        daemon.role_registry.acquire(
+            "window-manager",
+            POLICY,
+            holder=f"generation:{generation}",
+        )
+        daemon.catalog_lock = asyncio.Lock()
+        daemon.catalog_epoch = 1
+        daemon.start_locks = {}
+        daemon.stopping = False
+        daemon.stop_requests = set()
+        daemon.quarantined = set()
+        daemon.display_outage = {"recovery_allowed": set()}
+        return daemon, instance
+
+    async def test_ready_current_policy_remains_callable_until_outage_clears(self) -> None:
+        daemon, policy = self.fenced_start_daemon(ready=True)
+        forwarded: list[Instance] = []
+
+        async def forward(instance, _message, *, source):
+            self.assertEqual(source, CALLER)
+            forwarded.append(instance)
+            return {"type": "return", "id": 41, "payload": {"ok": True}}
+
+        daemon._forward_call = forward  # type: ignore[method-assign]
+
+        response = await daemon._dispatch_role_call(
+            {
+                "type": "call",
+                "id": 41,
+                "target": "role:window-manager",
+                "method": "get_layout",
+                "payload": {},
+                "idempotent": True,
+            },
+            source=CALLER,
+        )
+
+        self.assertEqual(response["type"], "return")
+        self.assertEqual(response["payload"], {"ok": True})
+        self.assertEqual(forwarded, [policy])
+        self.assertIsNotNone(daemon.display_outage)
+        self.assertEqual(daemon.display_outage["recovery_allowed"], set())
+
+    async def test_outage_still_fences_handshaking_consumer(self) -> None:
+        daemon, _consumer = self.fenced_start_daemon(ready=False)
+
+        with self.assertRaisesRegex(RuntimeError, "display-output is unavailable"):
+            await daemon._ensure_started_locked(POLICY)
+
+    async def test_outage_does_not_reuse_ready_stale_generation(self) -> None:
+        daemon, _stale = self.fenced_start_daemon(
+            ready=True,
+            current_generation=False,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "display-output is unavailable"):
+            await daemon._ensure_started_locked(POLICY)
 
     async def test_catalog_display_replacement_captures_and_recovers_consumers(self) -> None:
         daemon = MigrationDaemon()

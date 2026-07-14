@@ -1784,7 +1784,27 @@ class Msysd:
             raise KeyError(f"unknown component {key}")
         if key in self.quarantined:
             raise RuntimeError(f"component is quarantined: {key}")
-        if self._display_outage_blocks(self.components[key]):
+        component = self.components[key]
+        existing = self.instances.get(key)
+        # An outage fences new X11 generations, not RPC delivery to a
+        # generation which this daemon has already made ready.  In particular,
+        # window-policy becomes ready before later visual consumers finish
+        # their deliberately ordered recovery and must remain callable during
+        # that interval.  Keep every stale, exited and handshaking instance on
+        # the fenced path below.
+        if (
+            existing is not None
+            and existing.component is component
+            and existing.generation
+            == self.generations.get(key, existing.generation)
+            and existing.ready
+            and existing.state == "ready"
+            and not existing.finalized
+            and existing.process is not None
+            and existing.process.poll() is None
+        ):
+            return existing
+        if self._display_outage_blocks(component):
             raise RuntimeError(
                 f"display-output is unavailable; component start deferred: {key}"
             )
@@ -1818,7 +1838,6 @@ class Msysd:
             if self.stopping or key in self.stop_requests:
                 raise RuntimeError(f"component start cancelled: {key}")
 
-        component = self.components[key]
         for dep in component.requires:
             await self.ensure_ready(dep)
         for dep in component.after:

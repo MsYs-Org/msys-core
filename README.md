@@ -1,6 +1,6 @@
 # msys-core
 
-Current source version: `0.1.14`.
+Current source version: `0.1.15`.
 
 `msys-core` contains the MSYS supervisor and broker. It is intentionally
 self-contained: no systemd, no D-Bus, no logind, no polkit, no udev API.
@@ -195,7 +195,9 @@ readiness. A failed switch restores the previous role lease and preference,
 restarts attempted consumers on the old display, preserves foreground order,
 and publishes `rolled-back` with a structured error and rollback health. The
 `display_migration_status` method returns the active, requested, or latest
-migration record.
+migration record. During ordered recovery, an already-ready current-generation
+consumer remains callable; the outage fence still blocks every new,
+handshaking, exited, or stale generation until its recovery turn.
 
 CH347 USB/sink faults are retried inside the long-lived display provider, so
 Xorg `:24` and its clients remain untouched. If the provider itself exits, its
