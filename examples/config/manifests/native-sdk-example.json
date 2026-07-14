@@ -1,0 +1,39 @@
+{
+  "schema": "msys.manifest.v1",
+  "package": {
+    "id": "org.msys.sdk.native",
+    "name": "MSYS Native SDK Example",
+    "version": "0.1.0",
+    "kind": "system",
+    "summary": "On-demand C provider used to verify language-neutral mIPC"
+  },
+  "components": [
+    {
+      "id": "echo",
+      "name": "Native C Echo Provider",
+      "runtime": "c",
+      "exec": ["/opt/msys-dev/msys-sdk/build/msys-c-component"],
+      "lifecycle": "on-demand",
+      "restart": "on-failure",
+      "readiness": {"mode": "mipc-ready", "timeout_ms": 3000},
+      "provides": [
+        {
+          "interface": "org.msys.demo.echo.v1",
+          "exclusive": false,
+          "priority": 100
+        },
+        {
+          "capability": "runtime.native-c",
+          "exclusive": false,
+          "priority": 100
+        }
+      ],
+      "windowing": {"system": "none", "mode": "background"},
+      "activation": {"launchable": false},
+      "isolation": "baseline",
+      "permissions": [
+        "mipc.event:subscribe:org.msys.demo.tick"
+      ]
+    }
+  ]
+}

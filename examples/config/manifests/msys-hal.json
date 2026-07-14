@@ -1,0 +1,416 @@
+{
+  "schema": "msys.manifest.v1",
+  "package": {
+    "id": "org.msys.hal.linux",
+    "name": "MSYS Linux HAL",
+    "version": "0.2.1",
+    "kind": "system",
+    "summary": "Replaceable hardware abstraction manager and safe Linux providers"
+  },
+  "components": [
+    {
+      "id": "native-manager",
+      "runtime": "native",
+      "exec": [
+        "/opt/msys-dev/msys-hal/files/bin/msys-hal-native"
+      ],
+      "lifecycle": "background",
+      "restart": "on-failure",
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "isolation": "baseline",
+      "provides": [
+        {
+          "role": "hal-manager",
+          "exclusive": true,
+          "priority": 200,
+          "x-msys-contract": {
+            "id": "org.msys.role.hal-manager.v1",
+            "version": "1.0.0"
+          }
+        },
+        {
+          "interface": "org.msys.hal.manager.v1",
+          "exclusive": false,
+          "priority": 200
+        },
+        {
+          "capability": "hal.native.phase1",
+          "exclusive": false,
+          "priority": 200
+        }
+      ],
+      "permissions": [
+        "sysfs:read:power_supply",
+        "sysfs:read:thermal",
+        "sysfs:read:backlight",
+        "sysfs:write:backlight.brightness",
+        "sysfs:read:input",
+        "sysfs:read:net",
+        "sysfs:read:bluetooth",
+        "sysfs:read:rfkill",
+        "sysfs:write:rfkill.soft",
+        "runtime:connect:wpa-supplicant-control",
+        "mipc.event:publish:msys.hal.changed"
+      ]
+    },
+    {
+      "id": "manager",
+      "runtime": "python",
+      "exec": [
+        "python",
+        "-m",
+        "msys_hal.manager"
+      ],
+      "lifecycle": "on-demand",
+      "idle_timeout_ms": 30000,
+      "restart": "on-failure",
+      "env": {
+        "MSYS_HAL_POLL_INTERVAL": "30"
+      },
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "isolation": "baseline",
+      "provides": [
+        {
+          "role": "hal-manager",
+          "exclusive": true,
+          "priority": 100,
+          "x-msys-contract": {
+            "id": "org.msys.role.hal-manager.v1",
+            "version": "1.0.0"
+          }
+        },
+        {
+          "interface": "org.msys.hal.manager.v1",
+          "exclusive": false,
+          "priority": 100
+        },
+        {
+          "capability": "hal.management",
+          "exclusive": false
+        }
+      ],
+      "permissions": [
+        "mipc.call:msys.core.discover",
+        "mipc.call:org.msys.hal.provider.v1",
+        "mipc.call:component:org.msys.hal.linux:linux-power",
+        "mipc.call:component:org.msys.hal.linux:linux-thermal",
+        "mipc.call:component:org.msys.hal.linux:linux-backlight",
+        "mipc.call:component:org.msys.hal.linux:window-layout-display",
+        "mipc.call:component:org.msys.hal.linux:linux-input-inventory",
+        "mipc.call:component:org.msys.hal.linux:linux-network",
+        "mipc.call:component:org.msys.hal.linux:linux-bluetooth",
+        "mipc.call:component:org.msys.hal.linux:ch347-output-control",
+        "mipc.event:publish:msys.hal.ready",
+        "mipc.event:publish:msys.hal.changed"
+      ]
+    },
+    {
+      "id": "linux-power",
+      "runtime": "python",
+      "exec": [
+        "python",
+        "-m",
+        "msys_hal.provider",
+        "--domains",
+        "power"
+      ],
+      "lifecycle": "on-demand",
+      "idle_timeout_ms": 30000,
+      "restart": "on-failure",
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "isolation": "baseline",
+      "provides": [
+        {
+          "interface": "org.msys.hal.provider.v1",
+          "exclusive": false,
+          "priority": 50
+        },
+        {
+          "capability": "hal.power",
+          "exclusive": false,
+          "priority": 50
+        }
+      ],
+      "permissions": [
+        "sysfs:read:power_supply",
+        "mipc.event:publish:msys.hal.provider.ready"
+      ]
+    },
+    {
+      "id": "linux-thermal",
+      "runtime": "python",
+      "exec": [
+        "python",
+        "-m",
+        "msys_hal.provider",
+        "--domains",
+        "thermal"
+      ],
+      "lifecycle": "on-demand",
+      "idle_timeout_ms": 30000,
+      "restart": "on-failure",
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "isolation": "baseline",
+      "provides": [
+        {
+          "interface": "org.msys.hal.provider.v1",
+          "exclusive": false,
+          "priority": 50
+        },
+        {
+          "capability": "hal.thermal",
+          "exclusive": false,
+          "priority": 50
+        }
+      ],
+      "permissions": [
+        "sysfs:read:thermal",
+        "mipc.event:publish:msys.hal.provider.ready"
+      ]
+    },
+    {
+      "id": "linux-backlight",
+      "runtime": "python",
+      "exec": [
+        "python",
+        "-m",
+        "msys_hal.provider",
+        "--domains",
+        "backlight"
+      ],
+      "lifecycle": "on-demand",
+      "idle_timeout_ms": 30000,
+      "restart": "on-failure",
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "isolation": "baseline",
+      "provides": [
+        {
+          "interface": "org.msys.hal.provider.v1",
+          "exclusive": false,
+          "priority": 50
+        },
+        {
+          "capability": "hal.backlight",
+          "exclusive": false,
+          "priority": 50
+        }
+      ],
+      "permissions": [
+        "sysfs:read:backlight",
+        "sysfs:write:backlight.brightness",
+        "mipc.event:publish:msys.hal.provider.ready"
+      ]
+    },
+    {
+      "id": "window-layout-display",
+      "runtime": "python",
+      "exec": [
+        "python",
+        "-m",
+        "msys_hal.provider",
+        "--domains",
+        "display"
+      ],
+      "lifecycle": "on-demand",
+      "idle_timeout_ms": 30000,
+      "restart": "on-failure",
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "isolation": "baseline",
+      "provides": [
+        {
+          "interface": "org.msys.hal.provider.v1",
+          "exclusive": false,
+          "priority": 50
+        },
+        {
+          "capability": "hal.display.layout",
+          "exclusive": false,
+          "priority": 50
+        }
+      ],
+      "permissions": [
+        "mipc.call:role:window-manager",
+        "runtime:read:display-session",
+        "mipc.event:publish:msys.hal.provider.ready"
+      ]
+    },
+    {
+      "id": "linux-input-inventory",
+      "runtime": "python",
+      "exec": [
+        "python",
+        "-m",
+        "msys_hal.provider",
+        "--domains",
+        "input"
+      ],
+      "lifecycle": "on-demand",
+      "idle_timeout_ms": 30000,
+      "restart": "on-failure",
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "isolation": "baseline",
+      "provides": [
+        {
+          "interface": "org.msys.hal.provider.v1",
+          "exclusive": false,
+          "priority": 50
+        },
+        {
+          "capability": "hal.input.inventory",
+          "exclusive": false,
+          "priority": 50
+        }
+      ],
+      "permissions": [
+        "procfs:read:input.devices",
+        "sysfs:read:input",
+        "runtime:read:display-session",
+        "mipc.call:role:window-manager",
+        "x11:read:input-transform",
+        "x11:write:input-transform",
+        "mipc.event:publish:msys.hal.provider.ready"
+      ]
+    },
+    {
+      "id": "linux-network",
+      "name": "Linux Network HAL",
+      "runtime": "python",
+      "exec": [
+        "python",
+        "-m",
+        "msys_hal.provider",
+        "--domains",
+        "network"
+      ],
+      "lifecycle": "on-demand",
+      "idle_timeout_ms": 30000,
+      "restart": "on-failure",
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "isolation": "baseline",
+      "provides": [
+        {
+          "interface": "org.msys.hal.provider.v1",
+          "exclusive": false,
+          "priority": 50
+        },
+        {
+          "capability": "hal.network",
+          "exclusive": false,
+          "priority": 50
+        }
+      ],
+      "permissions": [
+        "sysfs:read:net",
+        "runtime:connect:wpa-supplicant-control",
+        "mipc.event:publish:msys.hal.provider.ready"
+      ]
+    },
+    {
+      "id": "linux-bluetooth",
+      "name": "Linux Bluetooth HAL",
+      "runtime": "python",
+      "exec": [
+        "python",
+        "-m",
+        "msys_hal.provider",
+        "--domains",
+        "bluetooth"
+      ],
+      "lifecycle": "on-demand",
+      "idle_timeout_ms": 30000,
+      "restart": "on-failure",
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "isolation": "baseline",
+      "provides": [
+        {
+          "interface": "org.msys.hal.provider.v1",
+          "exclusive": false,
+          "priority": 50
+        },
+        {
+          "capability": "hal.bluetooth",
+          "exclusive": false,
+          "priority": 50
+        }
+      ],
+      "permissions": [
+        "sysfs:read:bluetooth",
+        "sysfs:read:rfkill",
+        "sysfs:write:rfkill.soft",
+        "mipc.event:publish:msys.hal.provider.ready"
+      ]
+    },
+    {
+      "id": "ch347-output-control",
+      "name": "CH347 Output HAL Control",
+      "runtime": "python",
+      "exec": [
+        "python",
+        "-m",
+        "msys_hal.ch347"
+      ],
+      "lifecycle": "on-demand",
+      "idle_timeout_ms": 30000,
+      "restart": "on-failure",
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "isolation": "baseline",
+      "provides": [
+        {
+          "interface": "org.msys.hal.provider.v1",
+          "exclusive": false,
+          "priority": 100
+        },
+        {
+          "interface": "org.msys.hal.ch347-control.v1",
+          "exclusive": false,
+          "priority": 100
+        },
+        {
+          "capability": "hal.display-output.ch347",
+          "exclusive": false,
+          "priority": 100
+        }
+      ],
+      "permissions": [
+        "mipc.call:msys.core.list_components",
+        "mipc.call:msys.core.stop",
+        "mipc.call:msys.core.start",
+        "state:org.msys.openstick.ch347:read-write",
+        "runtime:read:ch347",
+        "procfs:read:ch347-processes",
+        "process:signal:ch347-capture",
+        "mipc.event:publish:msys.hal.provider.ready"
+      ]
+    }
+  ]
+}

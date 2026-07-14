@@ -1,0 +1,49 @@
+{
+  "schema": "msys.profile.v1",
+  "id": "kiosk-spi",
+  "disabled_roles": [
+    "launcher",
+    "system-chrome",
+    "notification-presenter",
+    "notification-center",
+    "task-switcher",
+    "chooser",
+    "transition-presenter",
+    "navigation-bar"
+  ],
+  "roles": {
+    "window-policy": ["org.msys.x11.session:window-policy"],
+    "window-manager": ["org.msys.x11.session:window-policy"],
+    "screen-shield": ["org.msys.shell.pyside:screen-shield"],
+    "hal-manager": [
+      "org.msys.hal.linux:native-manager",
+      "org.msys.hal.linux:manager"
+    ],
+    "input-method": ["org.msys.input.touch:keyboard"],
+    "install-agent": ["org.msys.core.install:install-agent"],
+    "update-agent": ["org.msys.core.install:update-agent"],
+    "display-output": [
+      "org.msys.openstick.ch347:x11-spi-touch-output"
+    ]
+  },
+  "startup": [
+    "org.msys.openstick.ch347:x11-spi-touch-output",
+    "org.msys.x11.session:window-policy",
+    "org.msys.hal.linux:native-manager",
+    "org.msys.demo:demo-app"
+  ],
+  "env": {
+    "FONTCONFIG_FILE": "/opt/msys/current/msys-x11-session/files/share/fontconfig/msys-fonts.conf",
+    "MSYS_LAYOUT_PROFILE": "kiosk",
+    "MSYS_ORIENTATION": "auto",
+    "MSYS_INSETS": "auto"
+  },
+  "settings": {
+    "memory_reclaim": {
+      "enabled": true,
+      "available_kib": 49152,
+      "poll_ms": 2000,
+      "min_app_age_ms": 15000
+    }
+  }
+}

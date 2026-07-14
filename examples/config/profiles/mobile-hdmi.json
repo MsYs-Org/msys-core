@@ -1,0 +1,62 @@
+{
+  "schema": "msys.profile.v1",
+  "id": "mobile-hdmi",
+  "roles": {
+    "launcher": [
+      "org.msys.shell.native:desktop-shell",
+      "org.msys.shell.pyside:launcher"
+    ],
+    "system-chrome": [
+      "org.msys.shell.native:desktop-shell",
+      "org.msys.shell.pyside:chrome"
+    ],
+    "window-policy": ["org.msys.x11.session:window-policy"],
+    "window-manager": ["org.msys.x11.session:window-policy"],
+    "notification-presenter": [
+      "org.msys.shell.native:desktop-shell",
+      "org.msys.shell.pyside:notifications"
+    ],
+    "notification-center": ["org.msys.shell.pyside:notification-center"],
+    "task-switcher": [
+      "org.msys.shell.native:desktop-shell",
+      "org.msys.shell.pyside:task-switcher"
+    ],
+    "chooser": ["org.msys.shell.pyside:intent-chooser"],
+    "screen-shield": ["org.msys.shell.pyside:screen-shield"],
+    "transition-presenter": ["org.msys.shell.pyside:transitions"],
+    "hal-manager": [
+      "org.msys.hal.linux:native-manager",
+      "org.msys.hal.linux:manager"
+    ],
+    "input-method": ["org.msys.input.touch:keyboard"],
+    "navigation-bar": [
+      "org.msys.shell.native:desktop-shell",
+      "org.msys.shell.pyside:navigation",
+      "org.msys.shell.pyside:navigation-pill"
+    ],
+    "install-agent": ["org.msys.core.install:install-agent"],
+    "update-agent": ["org.msys.core.install:update-agent"],
+    "display-output": ["org.msys.x11.session:hdmi-output"]
+  },
+  "startup": [
+    "org.msys.x11.session:hdmi-output",
+    "org.msys.x11.session:window-policy",
+    "org.msys.hal.linux:native-manager",
+    "org.msys.shell.native:desktop-shell"
+  ],
+  "env": {
+    "FONTCONFIG_FILE": "/opt/msys/current/msys-x11-session/files/share/fontconfig/msys-fonts.conf",
+    "MSYS_NATIVE_NAV_MODE": "buttons",
+    "MSYS_LAYOUT_PROFILE": "mobile",
+    "MSYS_ORIENTATION": "auto",
+    "MSYS_INSETS": "auto"
+  },
+  "settings": {
+    "memory_reclaim": {
+      "enabled": true,
+      "available_kib": 49152,
+      "poll_ms": 2000,
+      "min_app_age_ms": 15000
+    }
+  }
+}

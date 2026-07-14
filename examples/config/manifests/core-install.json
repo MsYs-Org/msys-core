@@ -1,0 +1,94 @@
+{
+  "schema": "msys.manifest.v1",
+  "package": {
+    "id": "org.msys.core.install",
+    "name": "MSYS Install and Update Services",
+    "version": "0.1.10",
+    "kind": "system",
+    "vendor": "MSYS",
+    "summary": "Atomic packages and publisher-authenticated remote update agents"
+  },
+  "components": [
+    {
+      "id": "install-agent",
+      "name": "Install Agent",
+      "runtime": "python",
+      "exec": [
+        "python",
+        "-m",
+        "msys_install.agent",
+        "install"
+      ],
+      "lifecycle": "on-demand",
+      "idle_timeout_ms": 30000,
+      "restart": "on-failure",
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "isolation": "baseline",
+      "provides": [
+        {
+          "role": "install-agent",
+          "exclusive": true,
+          "priority": 100
+        }
+      ],
+      "permissions": [
+        "mipc.call:msys.core",
+        "mipc.event:subscribe:msys.install.install_dir",
+        "mipc.event:subscribe:msys.install.install_archive",
+        "mipc.event:subscribe:msys.install.rollback",
+        "mipc.event:subscribe:msys.install.uninstall",
+        "mipc.event:subscribe:msys.install.registry",
+        "mipc.event:publish:msys.install.agent_ready",
+        "mipc.event:publish:msys.install.package_changed",
+        "mipc.event:publish:msys.install.error",
+        "mipc.event:publish:msys.install.registry",
+        "state:packages:read-write",
+        "state:updates:read-write"
+      ]
+    },
+    {
+      "id": "update-agent",
+      "name": "Update Agent",
+      "runtime": "python",
+      "exec": [
+        "python",
+        "-m",
+        "msys_install.agent",
+        "update"
+      ],
+      "lifecycle": "on-demand",
+      "idle_timeout_ms": 30000,
+      "restart": "on-failure",
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "isolation": "baseline",
+      "provides": [
+        {
+          "role": "update-agent",
+          "exclusive": true,
+          "priority": 100
+        }
+      ],
+      "permissions": [
+        "network:client",
+        "mipc.call:msys.core",
+        "mipc.event:subscribe:msys.update.check",
+        "mipc.event:subscribe:msys.update.apply",
+        "mipc.event:publish:msys.install.agent_ready",
+        "mipc.event:publish:msys.update.agent_ready",
+        "mipc.event:publish:msys.update.checked",
+        "mipc.event:publish:msys.update.applied",
+        "mipc.event:publish:msys.update.error",
+        "mipc.event:publish:msys.install.package_changed",
+        "state:packages:read-write",
+        "state:updates:read-write",
+        "state:trust:read-write"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "schema": "msys.native-lite-plan.source.v1",
+  "stop_grace_ms": 2000,
+  "components": [
+    {
+      "id": "display-provider",
+      "kind": "display",
+      "critical": true,
+      "restart": "on-failure",
+      "readiness": {
+        "mode": "fd",
+        "timeout_ms": 10000
+      },
+      "backoff": {
+        "initial_ms": 250,
+        "max_ms": 10000,
+        "limit": 8
+      },
+      "exec": [
+        "/opt/msys/libexec/display-provider",
+        "--foreground"
+      ],
+      "after": [],
+      "env": {}
+    },
+    {
+      "id": "window-provider",
+      "kind": "window",
+      "critical": true,
+      "restart": "on-failure",
+      "readiness": {
+        "mode": "fd",
+        "timeout_ms": 5000
+      },
+      "backoff": {
+        "initial_ms": 250,
+        "max_ms": 10000,
+        "limit": 8
+      },
+      "exec": [
+        "/opt/msys/libexec/window-provider",
+        "--foreground"
+      ],
+      "after": [
+        "display-provider"
+      ],
+      "env": {
+        "DISPLAY": ":24"
+      }
+    },
+    {
+      "id": "shell-provider",
+      "kind": "shell",
+      "critical": true,
+      "restart": "on-failure",
+      "readiness": {
+        "mode": "fd",
+        "timeout_ms": 5000
+      },
+      "backoff": {
+        "initial_ms": 250,
+        "max_ms": 10000,
+        "limit": 8
+      },
+      "exec": [
+        "/opt/msys/libexec/shell-provider",
+        "--foreground"
+      ],
+      "after": [
+        "window-provider"
+      ],
+      "env": {
+        "DISPLAY": ":24"
+      }
+    }
+  ]
+}

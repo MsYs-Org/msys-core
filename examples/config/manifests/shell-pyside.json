@@ -1,0 +1,508 @@
+{
+  "schema": "msys.manifest.v1",
+  "package": {
+    "id": "org.msys.shell.pyside",
+    "name": "MSYS Reference Shell",
+    "version": "0.1.10",
+    "kind": "system",
+    "vendor": "MSYS",
+    "summary": "Replaceable responsive shell, navigation, notification, chooser, and transition roles",
+    "x-msys-i18n": {
+      "catalog": "files/share/i18n/catalog.json",
+      "name_key": "package.name",
+      "summary_key": "package.summary"
+    }
+  },
+  "components": [
+    {
+      "id": "launcher",
+      "runtime": "python",
+      "exec": [
+        "python",
+        "-m",
+        "msys_shell_pyside.launcher"
+      ],
+      "lifecycle": "background",
+      "restart": "on-failure",
+      "env": {
+        "MSYS_LAUNCHER_UI": "tk"
+      },
+      "windowing": {
+        "system": "x11",
+        "display": "inherit",
+        "mode": "window",
+        "title": "MSYS Launcher",
+        "identity": {
+          "app_id": "org.msys.shell.launcher",
+          "x11_wm_class": "org.msys.shell.launcher"
+        }
+      },
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "after": [
+        "org.msys.openstick.ch347:x11-spi-touch-output",
+        "org.msys.x11.session:hdmi-output"
+      ],
+      "permissions": [
+        "display:x11",
+        "mipc.call:msys.core",
+        "mipc.event:subscribe:msys.install.package_changed",
+        "mipc.event:subscribe:msys.layout.changed",
+        "mipc.event:publish:msys.shell.ready",
+        "mipc.event:publish:msys.shell.preferences.changed",
+        "state:shell-preferences:read-write"
+      ],
+      "provides": [
+        {
+          "role": "launcher",
+          "exclusive": true,
+          "priority": 50,
+          "x-msys-contract": {
+            "id": "org.msys.role.launcher.v1",
+            "version": "1.0.0"
+          }
+        }
+      ]
+    },
+    {
+      "id": "transitions",
+      "runtime": "tk",
+      "exec": [
+        "python",
+        "-m",
+        "msys_shell_pyside.transition_presenter"
+      ],
+      "lifecycle": "on-demand",
+      "idle_timeout_ms": 15000,
+      "restart": "on-failure",
+      "windowing": {
+        "system": "x11",
+        "display": "inherit",
+        "mode": "overlay",
+        "title": "MSYS Transition",
+        "identity": {
+          "app_id": "org.msys.shell.transitions",
+          "x11_wm_class": "org.msys.shell.transitions"
+        }
+      },
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "after": [
+        "org.msys.openstick.ch347:x11-spi-touch-output",
+        "org.msys.x11.session:hdmi-output"
+      ],
+      "permissions": [
+        "display:x11",
+        "mipc.event:subscribe:msys.lifecycle.transition",
+        "mipc.event:publish:msys.role.ready"
+      ],
+      "provides": [
+        {
+          "role": "transition-presenter",
+          "exclusive": true,
+          "priority": 50
+        }
+      ]
+    },
+    {
+      "id": "chrome",
+      "runtime": "tk",
+      "exec": [
+        "python",
+        "-m",
+        "msys_shell_pyside.tk_roles",
+        "system-chrome"
+      ],
+      "lifecycle": "background",
+      "restart": "on-failure",
+      "windowing": {
+        "system": "x11",
+        "display": "inherit",
+        "mode": "overlay",
+        "title": "MSYS Chrome",
+        "identity": {
+          "app_id": "org.msys.shell.system-chrome",
+          "x11_wm_class": "org.msys.shell.system-chrome"
+        }
+      },
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "after": [
+        "org.msys.openstick.ch347:x11-spi-touch-output",
+        "org.msys.x11.session:hdmi-output"
+      ],
+      "permissions": [
+        "display:x11",
+        "mipc.call:role:notification-center",
+        "mipc.call:role:input-method",
+        "mipc.event:subscribe:msys.role.system-chrome",
+        "mipc.event:subscribe:msys.status.tick",
+        "mipc.event:publish:msys.role.ready"
+      ],
+      "provides": [
+        {
+          "role": "system-chrome",
+          "exclusive": true,
+          "priority": 50
+        }
+      ]
+    },
+    {
+      "id": "status-agent",
+      "runtime": "python",
+      "exec": [
+        "python",
+        "-m",
+        "msys_shell_pyside.status_agent"
+      ],
+      "lifecycle": "on-demand",
+      "idle_timeout_ms": 30000,
+      "restart": "on-failure",
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "permissions": [
+        "mipc.call:org.msys.hal.manager.v1",
+        "mipc.event:publish:msys.status.ready",
+        "mipc.event:publish:msys.status.tick"
+      ],
+      "provides": [
+        {
+          "capability": "status.system",
+          "exclusive": false
+        }
+      ]
+    },
+    {
+      "id": "notifications",
+      "runtime": "tk",
+      "exec": [
+        "python",
+        "-m",
+        "msys_shell_pyside.tk_roles",
+        "notification-presenter"
+      ],
+      "lifecycle": "on-demand",
+      "idle_timeout_ms": 15000,
+      "restart": "on-failure",
+      "env": {
+        "MSYS_NOTIFY_TIMEOUT_MS": "2500"
+      },
+      "windowing": {
+        "system": "x11",
+        "display": "inherit",
+        "mode": "overlay",
+        "title": "MSYS Notifications",
+        "identity": {
+          "app_id": "org.msys.shell.notifications",
+          "x11_wm_class": "org.msys.shell.notifications"
+        }
+      },
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "after": [
+        "org.msys.openstick.ch347:x11-spi-touch-output",
+        "org.msys.x11.session:hdmi-output"
+      ],
+      "permissions": [
+        "display:x11",
+        "mipc.event:subscribe:msys.role.notification-presenter",
+        "mipc.event:publish:msys.role.ready"
+      ],
+      "provides": [
+        {
+          "role": "notification-presenter",
+          "exclusive": true,
+          "priority": 50
+        }
+      ]
+    },
+    {
+      "id": "notification-center",
+      "runtime": "tk",
+      "exec": [
+        "python",
+        "-m",
+        "msys_shell_pyside.notification_center"
+      ],
+      "lifecycle": "on-demand",
+      "idle_timeout_ms": 60000,
+      "restart": "on-failure",
+      "env": {
+        "MSYS_NOTIFICATION_HISTORY_LIMIT": "100"
+      },
+      "windowing": {
+        "system": "x11",
+        "display": "inherit",
+        "mode": "overlay",
+        "title": "MSYS Notification Center",
+        "identity": {
+          "app_id": "org.msys.shell.notification-center",
+          "x11_wm_class": "org.msys.shell.notification-center"
+        }
+      },
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "after": [
+        "org.msys.openstick.ch347:x11-spi-touch-output",
+        "org.msys.x11.session:hdmi-output"
+      ],
+      "permissions": [
+        "display:x11",
+        "mipc.event:subscribe:msys.notification.post",
+        "mipc.event:subscribe:msys.role.notification-presenter",
+        "mipc.event:publish:msys.role.ready",
+        "state:notifications:read-write"
+      ],
+      "provides": [
+        {
+          "role": "notification-center",
+          "exclusive": true,
+          "priority": 50
+        }
+      ]
+    },
+    {
+      "id": "task-switcher",
+      "runtime": "tk",
+      "exec": [
+        "python",
+        "-m",
+        "msys_shell_pyside.task_switcher"
+      ],
+      "lifecycle": "on-demand",
+      "idle_timeout_ms": 60000,
+      "restart": "on-failure",
+      "windowing": {
+        "system": "x11",
+        "display": "inherit",
+        "mode": "overlay",
+        "title": "MSYS Recents",
+        "identity": {
+          "app_id": "org.msys.shell.task-switcher",
+          "x11_wm_class": "org.msys.shell.task-switcher"
+        }
+      },
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "after": [
+        "org.msys.openstick.ch347:x11-spi-touch-output",
+        "org.msys.x11.session:hdmi-output"
+      ],
+      "permissions": [
+        "display:x11",
+        "mipc.call:msys.core",
+        "mipc.call:role:window-manager",
+        "mipc.event:publish:msys.role.ready"
+      ],
+      "provides": [
+        {
+          "role": "task-switcher",
+          "exclusive": true,
+          "priority": 50
+        }
+      ]
+    },
+    {
+      "id": "intent-chooser",
+      "runtime": "tk",
+      "exec": [
+        "python",
+        "-m",
+        "msys_shell_pyside.intent_chooser"
+      ],
+      "lifecycle": "on-demand",
+      "idle_timeout_ms": 30000,
+      "restart": "on-failure",
+      "env": {
+        "MSYS_CHOOSER_TIMEOUT_MS": "25000"
+      },
+      "windowing": {
+        "system": "x11",
+        "display": "inherit",
+        "mode": "overlay",
+        "title": "MSYS Intent Chooser",
+        "identity": {
+          "app_id": "org.msys.shell.intent-chooser",
+          "x11_wm_class": "org.msys.shell.intent-chooser"
+        }
+      },
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "after": [
+        "org.msys.openstick.ch347:x11-spi-touch-output",
+        "org.msys.x11.session:hdmi-output"
+      ],
+      "permissions": [
+        "display:x11",
+        "mipc.event:publish:msys.role.ready",
+        "state:intent-preferences:read-write"
+      ],
+      "provides": [
+        {
+          "role": "chooser",
+          "exclusive": true,
+          "priority": 50
+        }
+      ]
+    },
+    {
+      "id": "screen-shield",
+      "runtime": "tk",
+      "exec": [
+        "python",
+        "-m",
+        "msys_shell_pyside.screen_shield"
+      ],
+      "lifecycle": "manual",
+      "restart": "never",
+      "env": {
+        "MSYS_SCREEN_SHIELD_TOUCH_DISMISS": "1"
+      },
+      "windowing": {
+        "system": "x11",
+        "display": "inherit",
+        "mode": "fullscreen",
+        "title": "MSYS Screen Shield",
+        "identity": {
+          "app_id": "org.msys.shell.screen-shield",
+          "x11_wm_class": "org.msys.shell.screen-shield"
+        }
+      },
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "after": [
+        "org.msys.openstick.ch347:x11-spi-touch-output",
+        "org.msys.x11.session:hdmi-output"
+      ],
+      "permissions": [
+        "display:x11",
+        "mipc.event:subscribe:msys.role.screen-shield",
+        "mipc.event:publish:msys.role.ready"
+      ],
+      "provides": [
+        {
+          "role": "screen-shield",
+          "exclusive": true,
+          "priority": 50
+        }
+      ]
+    },
+    {
+      "id": "navigation",
+      "runtime": "tk",
+      "exec": [
+        "python",
+        "-m",
+        "msys_shell_pyside.tk_roles",
+        "navigation-bar"
+      ],
+      "lifecycle": "background",
+      "restart": "on-failure",
+      "windowing": {
+        "system": "x11",
+        "display": "inherit",
+        "mode": "overlay",
+        "title": "MSYS Navigation",
+        "identity": {
+          "app_id": "org.msys.shell.navigation",
+          "x11_wm_class": "org.msys.shell.navigation"
+        }
+      },
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "after": [
+        "org.msys.openstick.ch347:x11-spi-touch-output",
+        "org.msys.x11.session:hdmi-output"
+      ],
+      "permissions": [
+        "display:x11",
+        "mipc.call:role:task-switcher",
+        "mipc.call:role:window-manager",
+        "mipc.event:subscribe:msys.role.navigation-bar",
+        "mipc.event:publish:msys.role.ready"
+      ],
+      "provides": [
+        {
+          "role": "navigation-bar",
+          "exclusive": true,
+          "priority": 50,
+          "x-msys-contract": {
+            "id": "org.msys.role.navigation-bar.v1",
+            "version": "1.0.0"
+          }
+        }
+      ]
+    },
+    {
+      "id": "navigation-pill",
+      "runtime": "tk",
+      "exec": [
+        "python",
+        "-m",
+        "msys_shell_pyside.tk_roles",
+        "navigation-bar"
+      ],
+      "lifecycle": "background",
+      "restart": "on-failure",
+      "env": {
+        "MSYS_NAV_MODE": "pill"
+      },
+      "windowing": {
+        "system": "x11",
+        "display": "inherit",
+        "mode": "overlay",
+        "title": "MSYS Navigation",
+        "identity": {
+          "app_id": "org.msys.shell.navigation-pill",
+          "x11_wm_class": "org.msys.shell.navigation-pill"
+        }
+      },
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "after": [
+        "org.msys.openstick.ch347:x11-spi-touch-output",
+        "org.msys.x11.session:hdmi-output"
+      ],
+      "permissions": [
+        "display:x11",
+        "mipc.call:role:task-switcher",
+        "mipc.call:role:window-manager",
+        "mipc.event:subscribe:msys.role.navigation-bar",
+        "mipc.event:publish:msys.role.ready"
+      ],
+      "provides": [
+        {
+          "role": "navigation-bar",
+          "exclusive": true,
+          "priority": 40,
+          "x-msys-contract": {
+            "id": "org.msys.role.navigation-bar.v1",
+            "version": "1.0.0"
+          }
+        }
+      ]
+    }
+  ]
+}

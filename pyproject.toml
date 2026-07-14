@@ -1,0 +1,13 @@
+[project]
+name = "msys-core"
+version = "0.1.14"
+description = "MSYS self-contained supervisor and IPC broker"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+msysd = "msys_core.msysd:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

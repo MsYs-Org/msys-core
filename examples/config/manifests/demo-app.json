@@ -1,0 +1,24 @@
+{
+  "schema": "msys.manifest.v1",
+  "package": {
+    "id": "org.msys.demo",
+    "version": "0.1.1",
+    "kind": "application"
+  },
+  "components": [
+    {
+      "id": "demo-app",
+      "name": "MSYS Demo App",
+      "runtime": "python",
+      "exec": ["python", "-m", "msys_shell_pyside.demo_app"],
+      "lifecycle": "manual",
+      "restart": "never",
+      "readiness": {"mode": "exec", "timeout_ms": 3000},
+      "windowing": {"system": "x11", "display": "inherit", "mode": "window", "title": "MSYS Demo App", "identity": {"app_id": "org.msys.demo.app", "x11_wm_class": "org.msys.demo.app"}},
+      "activation": {"launchable": false},
+      "provides": [
+        {"capability": "app.demo", "exclusive": false}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,174 @@
+{
+  "schema": "msys.manifest.v1",
+  "package": {
+    "id": "org.msys.x11.session",
+    "name": "MSYS X11 Session",
+    "version": "0.2.3",
+    "kind": "system",
+    "vendor": "MSYS",
+    "summary": "Native X11 window policy and replaceable display-session providers"
+  },
+  "components": [
+    {
+      "id": "window-policy",
+      "name": "Native X11 Window Policy",
+      "runtime": "c",
+      "exec": [
+        "/opt/msys-dev/msys-x11-session/bin/msys-x11-policy"
+      ],
+      "lifecycle": "background",
+      "restart": "on-failure",
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "after": [
+        "org.msys.openstick.ch347:x11-spi-touch-output",
+        "org.msys.x11.session:hdmi-output"
+      ],
+      "windowing": {
+        "system": "x11",
+        "display": "inherit",
+        "mode": "background"
+      },
+      "provides": [
+        {
+          "role": "window-policy",
+          "exclusive": true,
+          "priority": 110
+        },
+        {
+          "role": "window-manager",
+          "exclusive": true,
+          "priority": 110,
+          "x-msys-contract": {
+            "id": "org.msys.role.window-manager.v1",
+            "version": "1.0.0"
+          }
+        },
+        {
+          "interface": "org.msys.window-policy.v1",
+          "exclusive": false,
+          "priority": 110
+        },
+        {
+          "interface": "org.msys.window-manager.v1",
+          "exclusive": false,
+          "priority": 110
+        }
+      ],
+      "permissions": [
+        "mipc.call:msys.core",
+        "mipc.call:role:chooser",
+        "mipc.call:role:notification-center",
+        "mipc.call:role:task-switcher",
+        "mipc.call:role:screen-shield",
+        "mipc.call:role:input-method",
+        "mipc.event:publish:msys.window_policy.ready",
+        "mipc.event:publish:msys.display_session.applied",
+        "mipc.event:publish:msys.layout.changed",
+        "x11:manage-windows"
+      ]
+    },
+    {
+      "id": "window-policy-python",
+      "name": "X11 Window Policy Compatibility Fallback",
+      "runtime": "python",
+      "exec": [
+        "python",
+        "/opt/msys-dev/msys-x11-session/scripts/msys_window_policy_entry.py",
+        "--native-policy",
+        "/opt/msys-dev/msys-x11-session/bin/msys-x11-policy"
+      ],
+      "lifecycle": "on-demand",
+      "idle_timeout_ms": 30000,
+      "restart": "on-failure",
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "after": [
+        "org.msys.openstick.ch347:x11-spi-touch-output",
+        "org.msys.x11.session:hdmi-output"
+      ],
+      "windowing": {
+        "system": "x11",
+        "display": "inherit",
+        "mode": "background"
+      },
+      "provides": [
+        {
+          "role": "window-policy",
+          "exclusive": true,
+          "priority": 10
+        },
+        {
+          "interface": "org.msys.window-policy.v1",
+          "exclusive": false,
+          "priority": 10
+        }
+      ],
+      "permissions": [
+        "mipc.call:msys.core",
+        "mipc.call:role:chooser",
+        "mipc.call:role:notification-center",
+        "mipc.call:role:task-switcher",
+        "mipc.call:role:screen-shield",
+        "mipc.call:role:input-method",
+        "mipc.event:publish:msys.window_policy.ready",
+        "mipc.event:publish:msys.display_session.applied",
+        "mipc.event:publish:msys.layout.changed",
+        "x11:manage-windows"
+      ]
+    },
+    {
+      "id": "hdmi-output",
+      "name": "Xorg HDMI Output",
+      "runtime": "shell",
+      "exec": [
+        "bash",
+        "/opt/msys-dev/msys-x11-session/scripts/msys_hdmi_x11_provider.sh"
+      ],
+      "lifecycle": "background",
+      "restart": "on-failure",
+      "env": {
+        "DISPLAY": ":0",
+        "DISPLAY_ID": ":0",
+        "MSYS_DISPLAY_INPUT_MODE": "none",
+        "MSYS_X11_READY_FILE": "/tmp/msys-x11-hdmi/display-session.json"
+      },
+      "readiness": {
+        "mode": "x11-display",
+        "timeout_ms": 15000
+      },
+      "windowing": {
+        "system": "x11",
+        "display": ":0",
+        "mode": "display-provider"
+      },
+      "provides": [
+        {
+          "role": "display-output",
+          "exclusive": true,
+          "priority": 40,
+          "x-msys-contract": {
+            "id": "org.msys.role.display-output.v1",
+            "version": "1.0.0"
+          }
+        },
+        {
+          "capability": "display.hdmi.x11",
+          "exclusive": false
+        },
+        {
+          "capability": "display.session.v1",
+          "exclusive": false
+        },
+        {
+          "capability": "x11.display.:0",
+          "exclusive": false
+        }
+      ]
+    }
+  ]
+}

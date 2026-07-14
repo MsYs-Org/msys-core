@@ -1,0 +1,67 @@
+{
+  "schema": "msys.manifest.v1",
+  "package": {
+    "id": "org.msys.input.touch",
+    "name": "MSYS Touch Input",
+    "version": "0.1.7",
+    "kind": "system",
+    "vendor": "MSYS",
+    "summary": "Replaceable floating touch keyboard with bounded Pinyin candidates",
+    "x-msys-i18n": {
+      "catalog": "files/share/i18n/catalog.json",
+      "name_key": "app.name",
+      "summary_key": "app.summary"
+    }
+  },
+  "components": [
+    {
+      "id": "keyboard",
+      "name": "Touch keyboard",
+      "runtime": "tk",
+      "exec": [
+        "python",
+        "/opt/msys-dev/msys-input-touch/files/app/main.py"
+      ],
+      "lifecycle": "on-demand",
+      "restart": "never",
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "MSYS_WINDOW_ROLE": "input-method"
+      },
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 5000
+      },
+      "after": [
+        "org.msys.openstick.ch347:x11-spi-touch-output",
+        "org.msys.x11.session:hdmi-output"
+      ],
+      "windowing": {
+        "system": "x11",
+        "display": "inherit",
+        "mode": "overlay",
+        "title": "MSYS Touch Input",
+        "identity": {
+          "app_id": "org.msys.input.touch",
+          "x11_wm_class": "org.msys.input.touch",
+          "x11_wm_instance": "keyboard"
+        }
+      },
+      "permissions": [
+        "display:x11",
+        "x11:inject-input",
+        "mipc.call:role:window-manager",
+        "mipc.event:subscribe:msys.lifecycle.transition",
+        "mipc.event:publish:msys.role.ready"
+      ],
+      "isolation": "baseline",
+      "provides": [
+        {
+          "role": "input-method",
+          "exclusive": true,
+          "priority": 50
+        }
+      ]
+    }
+  ]
+}

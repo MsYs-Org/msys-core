@@ -1,0 +1,97 @@
+{
+    "schema":  "msys.manifest.v1",
+    "package":  {
+                    "id":  "org.msys.x11demo",
+                    "version":  "0.1.1",
+                    "kind":  "application"
+                },
+    "components":  [
+                       {
+                           "id":  "root-color",
+                           "runtime":  "shell",
+                           "exec":  [
+                                        "sh",
+                                        "-lc",
+                                        "xsetroot -display \"$DISPLAY\" -solid \u0027#00aa44\u0027; sleep 3600"
+                                    ],
+                           "lifecycle":  "manual",
+                           "restart":  "never",
+                           "readiness":  {
+                                             "mode":  "exec",
+                                             "timeout_ms":  1000
+                                         },
+                           "windowing":  {
+                                             "system":  "x11",
+                                             "display":  "inherit",
+                                             "mode":  "background"
+                                         },
+                           "provides":  [
+                                            {
+                                                "capability":  "app.x11-root-color",
+                                                "exclusive":  false
+                                            }
+                                        ],
+                           "name":  "Root Color Demo"
+                       },
+                       {
+                           "id":  "xterm-hold",
+                           "runtime":  "shell",
+                           "exec":  [
+                                        "sh",
+                                        "-lc",
+                                        "xterm -class \"${MSYS_WINDOW_IDENTITY:-org.msys.x11demo.terminal}\" -title \u0027Terminal Demo\u0027 -geometry 34x10+12+40 -fa Monospace -fs 10 -e sh -lc \u0027printf \"MSYS X11 OK\\nDISPLAY=$DISPLAY\\n\"; sleep 3600\u0027"
+                                    ],
+                           "lifecycle":  "manual",
+                           "restart":  "never",
+                           "readiness":  {
+                                             "mode":  "exec",
+                                             "timeout_ms":  1000
+                                         },
+                           "windowing":  {
+                                             "system":  "x11",
+                                             "display":  "inherit",
+                                             "mode":  "window",
+                                             "title":  "Terminal Demo",
+                                             "identity":  {"app_id": "org.msys.x11demo.terminal", "x11_wm_class": "org.msys.x11demo.terminal"}
+                                         },
+                           "activation":  {"launchable": false},
+                           "provides":  [
+                                            {
+                                                "capability":  "app.x11-xterm-hold",
+                                                "exclusive":  false
+                                            }
+                                        ],
+                           "name":  "Terminal Demo"
+                       },
+                       {
+                           "id":  "xmessage",
+                           "runtime":  "shell",
+                           "exec":  [
+                                        "sh",
+                                        "-lc",
+                                        "if command -v xmessage \u003e/dev/null 2\u003e\u00261; then xmessage -name \"${MSYS_WINDOW_IDENTITY:-org.msys.x11demo.message}\" -title \u0027Message Demo\u0027 -center \u0027MSYS X11 OK\u0027; elif command -v xterm \u003e/dev/null 2\u003e\u00261; then xterm -class \"${MSYS_WINDOW_IDENTITY:-org.msys.x11demo.message}\" -title \u0027Message Demo\u0027 -geometry 32x8+20+20 -e sh -lc \u0027echo MSYS X11 OK; sleep 60\u0027; else python -m msys_shell_pyside.demo_app; fi"
+                                    ],
+                           "lifecycle":  "manual",
+                           "restart":  "never",
+                           "readiness":  {
+                                             "mode":  "exec",
+                                             "timeout_ms":  3000
+                                         },
+                           "windowing":  {
+                                             "system":  "x11",
+                                             "display":  "inherit",
+                                             "mode":  "window",
+                                             "title":  "Message Demo",
+                                             "identity":  {"app_id": "org.msys.x11demo.message", "x11_wm_class": "org.msys.x11demo.message"}
+                                         },
+                           "activation":  {"launchable": false},
+                           "provides":  [
+                                            {
+                                                "capability":  "app.x11-visible-demo",
+                                                "exclusive":  false
+                                            }
+                                        ],
+                           "name":  "Message Demo"
+                       }
+                   ]
+}

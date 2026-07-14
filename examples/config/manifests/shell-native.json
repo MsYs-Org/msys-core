@@ -1,0 +1,120 @@
+{
+  "schema": "msys.manifest.v1",
+  "package": {
+    "id": "org.msys.shell.native",
+    "name": "MSYS Native Shell",
+    "version": "0.3.0",
+    "kind": "system",
+    "vendor": "MSYS",
+    "summary": "Lean adaptive Xlib shell with app icons and task previews",
+    "x-msys-i18n": {
+      "catalog": "files/share/i18n/catalog.json",
+      "name_key": "package.name",
+      "summary_key": "package.summary"
+    }
+  },
+  "components": [
+    {
+      "id": "desktop-shell",
+      "name": "Native desktop shell",
+      "runtime": "native",
+      "exec": [
+        "/opt/msys-dev/msys-shell-native/bin/msys-shell-native"
+      ],
+      "lifecycle": "background",
+      "restart": "on-failure",
+      "readiness": {
+        "mode": "mipc-ready",
+        "timeout_ms": 8000
+      },
+      "after": [
+        "org.msys.openstick.ch347:x11-spi-touch-output",
+        "org.msys.x11.session:hdmi-output"
+      ],
+      "windowing": {
+        "system": "x11",
+        "display": "inherit",
+        "mode": "window",
+        "title": "MSYS Launcher",
+        "identity": {
+          "app_id": "org.msys.shell.native.launcher",
+          "x11_wm_class": "org.msys.shell.native.launcher",
+          "x11_wm_instance": "msys-shell-native"
+        }
+      },
+      "x-msys-role-windows": {
+        "launcher": {
+          "system": "x11",
+          "display": "inherit",
+          "mode": "window",
+          "title": "MSYS Launcher",
+          "identity": {
+            "app_id": "org.msys.shell.native.launcher",
+            "x11_wm_class": "org.msys.shell.native.launcher",
+            "x11_wm_instance": "msys-shell-native"
+          }
+        },
+        "navigation-bar": {
+          "system": "x11",
+          "display": "inherit",
+          "mode": "overlay",
+          "title": "MSYS Navigation",
+          "identity": {
+            "app_id": "org.msys.shell.native.navigation-pill",
+            "x11_wm_class": "org.msys.shell.native.navigation-pill",
+            "x11_wm_instance": "msys-shell-native"
+          },
+          "edge": "bottom"
+        }
+      },
+      "permissions": [
+        "display:x11",
+        "mipc.call:msys.core",
+        "mipc.call:role:window-manager",
+        "mipc.call:role:notification-center",
+        "mipc.event:subscribe:msys.role.notification-presenter",
+        "mipc.event:subscribe:msys.role.navigation-bar",
+        "mipc.event:subscribe:msys.role.system-chrome",
+        "mipc.event:subscribe:msys.install.package_changed",
+        "mipc.event:publish:msys.shell.preferences.changed",
+        "mipc.event:publish:msys.role.ready"
+      ],
+      "isolation": "baseline",
+      "provides": [
+        {
+          "role": "launcher",
+          "exclusive": true,
+          "priority": 90,
+          "x-msys-contract": {
+            "id": "org.msys.role.launcher.v1",
+            "version": "1.0.0"
+          }
+        },
+        {
+          "role": "system-chrome",
+          "exclusive": true,
+          "priority": 90
+        },
+        {
+          "role": "navigation-bar",
+          "exclusive": true,
+          "priority": 90,
+          "x-msys-contract": {
+            "id": "org.msys.role.navigation-bar.v1",
+            "version": "1.0.0"
+          }
+        },
+        {
+          "role": "task-switcher",
+          "exclusive": true,
+          "priority": 90
+        },
+        {
+          "role": "notification-presenter",
+          "exclusive": true,
+          "priority": 90
+        }
+      ]
+    }
+  ]
+}

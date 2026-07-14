@@ -1,0 +1,38 @@
+{
+  "schema": "msys.manifest.v1",
+  "package": {
+    "id": "org.msys.openstick.ch347",
+    "version": "0.1.4",
+    "kind": "driver"
+  },
+  "components": [
+    {
+      "id": "x11-spi-touch-output",
+      "runtime": "shell",
+      "exec": ["bash", "/opt/msys-dev/msys-x11-session/scripts/msys_ch347_x11_provider.sh"],
+      "lifecycle": "background",
+      "restart": "on-failure",
+      "env": {
+        "CH347_TOUCH": "1",
+        "DEBUG": "1",
+        "FPS": "60",
+        "XCAP_IDLE_FPS": "1",
+        "DISPLAY": ":24",
+        "DISPLAY_ID": ":24",
+        "APP": "none",
+        "WM": "none",
+        "MSYS_X11_READY_FILE": "/tmp/ch347_dirty_usb_x11/msys.ready",
+        "MSYS_DISPLAY_INPUT_MODE": "ch347-direct"
+      },
+      "readiness": {"mode": "x11-display", "timeout_ms": 15000},
+      "windowing": {"system": "x11", "display": ":24", "mode": "display-provider"},
+      "provides": [
+        {"role": "display-output", "exclusive": true, "priority": 100, "x-msys-contract": {"id": "org.msys.role.display-output.v1", "version": "1.0.0"}},
+        {"capability": "display.spi.ch347.st7796", "exclusive": false},
+        {"capability": "input.touch.ch347", "exclusive": false},
+        {"capability": "display.session.v1", "exclusive": false},
+        {"capability": "x11.display.:24", "exclusive": false}
+      ]
+    }
+  ]
+}
