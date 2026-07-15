@@ -1,6 +1,11 @@
 # msys-core
 
-Current source version: `0.1.18`.
+Current source version: `0.1.19`.
+
+Version 0.1.19 adds the bounded, read-only `msys.core.list_processes` process
+inventory described below. It reuses Core's live component generations and
+reads optional host-process metadata directly from `/proc`; it starts no
+helper and has no systemd, D-Bus, or `ps` dependency.
 
 `msys-core` contains the MSYS supervisor and broker. It is intentionally
 self-contained: no systemd, no D-Bus, no logind, no polkit, no udev API.
@@ -168,6 +173,47 @@ same threshold was consumed and removed, a 2,616 KiB reduction. Samples were
 fresh, unswapped processes using the same runtime and `MALLOC_ARENA_MAX=2`.
 `python -S` was within 48 KiB of baseline, while `PYTHONMALLOC=malloc` increased
 private anonymous memory by about 4.2 MiB; neither is enabled.
+
+## Read-only process inventory
+
+`msys.core.list_processes({})` returns Core itself plus live supervised MSYS
+components whose manifest declares no X11/Wayland/window/overlay surface.
+This default path is small and does not enumerate unrelated Linux processes.
+Each result has the same closed fields; Core uses `source: "msys-core"`,
+`component: "msys.core"`, and `lifecycle: "supervisor"`:
+
+```json
+{
+  "pid": 123,
+  "ppid": 1,
+  "uid": 0,
+  "name": "msys-hal-native",
+  "state": "sleeping",
+  "rss_kib": 2048,
+  "source": "msys-supervisor",
+  "msys_owned": true,
+  "component": "org.msys.hal.linux:native-manager",
+  "component_state": "ready",
+  "runtime": "native",
+  "lifecycle": "background",
+  "generation": 1
+}
+```
+
+`include_system` opts into a direct procfs snapshot of non-MSYS processes:
+
+```json
+{"include_system": true, "limit": 64}
+```
+
+The system `limit` defaults to 64 and is restricted to `1..128`; managed
+headless results are independently capped at 128. Top-level
+`managed_truncated` and `system_truncated` fields make either bound explicit.
+System entries use `source: "procfs"`, `msys_owned: false`, and null MSYS-only
+fields. Core excludes itself, every supervised leader, and descendants that
+share a supervised process group or session. Enumeration retains at most the
+requested number of proc records in memory, emits them in PID order, never
+returns command lines or environment values, and invokes no external command.
 
 The checked-in `examples/config/manifests/shell-native.json` is a generated
 development fallback. It preserves the canonical package semantics while

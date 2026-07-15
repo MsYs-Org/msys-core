@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import fcntl
 import fnmatch
+import heapq
 import json
 import os
 import re
@@ -77,6 +78,24 @@ DEFAULT_MEMINFO_PATH = Path("/proc/meminfo")
 DEFAULT_PROC_ROOT = Path("/proc")
 CATALOG_TRANSACTION_SCHEMA = "msys.catalog-transaction.v1"
 APPLICATION_NAVIGATION_INTERFACE = "org.msys.application-navigation.v1"
+PROCESS_LIST_SCHEMA = "msys.process-list.v1"
+DEFAULT_SYSTEM_PROCESS_LIMIT = 64
+MAX_SYSTEM_PROCESS_LIMIT = 128
+MAX_MANAGED_PROCESS_RESULTS = 128
+MAX_PROCESS_NAME_LENGTH = 64
+
+_LINUX_PROCESS_STATES = {
+    "R": "running",
+    "S": "sleeping",
+    "D": "disk-sleep",
+    "Z": "zombie",
+    "T": "stopped",
+    "t": "tracing-stop",
+    "X": "dead",
+    "x": "dead",
+    "I": "idle",
+    "P": "parked",
+}
 
 # Locale values are part of the visual-session contract, not application
 # configuration.  Keep the list deliberately small and POSIX-compatible:
@@ -174,6 +193,161 @@ def process_memory_snapshot(
             else "pss-unavailable" if rss_complete else "memory-unavailable"
         ),
     }
+
+
+def _bounded_process_name(value: object, fallback: str) -> str:
+    """Return a single-line proc name with a fixed response-size bound."""
+
+    text = "".join(
+        character if character.isprintable() and character not in "\r\n\0" else "?"
+        for character in str(value)
+    ).strip()
+    if not text:
+        text = fallback
+    return text[:MAX_PROCESS_NAME_LENGTH]
+
+
+def _proc_process_record(
+    pid: int,
+    proc_root: Path = DEFAULT_PROC_ROOT,
+) -> dict[str, Any] | None:
+    """Read one bounded Linux process record directly from procfs.
+
+    ``stat`` is authoritative for identity and parent/group/session metadata;
+    ``status`` supplies the real UID and leader RSS when available.  A process
+    that exits during either read is simply omitted from the snapshot.
+    """
+
+    if pid <= 0:
+        return None
+    directory = proc_root / str(pid)
+    try:
+        stat_text = (directory / "stat").read_text(
+            encoding="ascii", errors="replace"
+        )
+        opening = stat_text.index("(")
+        closing = stat_text.rindex(")")
+        fields = stat_text[closing + 1 :].split()
+        if len(fields) < 4:
+            return None
+        state_code = fields[0]
+        ppid = int(fields[1])
+        process_group = int(fields[2])
+        session = int(fields[3])
+        name = _bounded_process_name(stat_text[opening + 1 : closing], str(pid))
+    except (OSError, ValueError, IndexError):
+        return None
+
+    uid: int | None = None
+    rss_kib: int | None = None
+    try:
+        status_text = (directory / "status").read_text(
+            encoding="ascii", errors="replace"
+        )
+    except OSError:
+        status_text = ""
+    uid_match = re.search(r"(?m)^Uid:\s+([0-9]+)(?:\s|$)", status_text)
+    if uid_match is not None:
+        uid = int(uid_match.group(1))
+    rss_match = re.search(r"(?m)^VmRSS:\s+([0-9]+)\s+kB\s*$", status_text)
+    if rss_match is not None:
+        rss_kib = int(rss_match.group(1))
+    return {
+        "pid": pid,
+        "ppid": ppid,
+        "process_group": process_group,
+        "session": session,
+        "uid": uid,
+        "name": name,
+        "state": _LINUX_PROCESS_STATES.get(state_code, "unknown"),
+        "rss_kib": rss_kib,
+    }
+
+
+def _public_process_record(
+    record: dict[str, Any],
+    *,
+    source: str,
+    msys_owned: bool,
+    component: str | None = None,
+    component_state: str | None = None,
+    runtime: str | None = None,
+    lifecycle: str | None = None,
+    generation: int | None = None,
+) -> dict[str, Any]:
+    """Project internal proc metadata onto the closed public v1 fields."""
+
+    return {
+        "pid": int(record["pid"]),
+        "ppid": record.get("ppid"),
+        "uid": record.get("uid"),
+        "name": str(record["name"]),
+        "state": str(record["state"]),
+        "rss_kib": record.get("rss_kib"),
+        "source": source,
+        "msys_owned": msys_owned,
+        "component": component,
+        "component_state": component_state,
+        "runtime": runtime,
+        "lifecycle": lifecycle,
+        "generation": generation,
+    }
+
+
+def system_process_snapshot(
+    managed_leader_pids: set[int],
+    *,
+    proc_root: Path = DEFAULT_PROC_ROOT,
+    limit: int = DEFAULT_SYSTEM_PROCESS_LIMIT,
+    supervisor_pid: int | None = None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Return a bounded, PID-ordered non-MSYS Linux process snapshot.
+
+    The scan retains only ``limit`` records in memory.  Component descendants
+    are excluded by their process-group or session leader, matching Core's
+    supervised ``start_new_session`` process boundary.
+    """
+
+    if not 1 <= limit <= MAX_SYSTEM_PROCESS_LIMIT:
+        raise ValueError("system process limit is out of range")
+    if supervisor_pid is None:
+        supervisor_pid = os.getpid()
+    heap: list[tuple[int, int, dict[str, Any]]] = []
+    eligible_count = 0
+    try:
+        entries = os.scandir(proc_root)
+    except OSError:
+        return [], False
+    with entries:
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            pid = int(entry.name)
+            record = _proc_process_record(pid, proc_root)
+            if record is None:
+                continue
+            if (
+                pid == supervisor_pid
+                or pid in managed_leader_pids
+                or record["process_group"] in managed_leader_pids
+                or record["session"] in managed_leader_pids
+            ):
+                continue
+            eligible_count += 1
+            item = (-pid, pid, record)
+            if len(heap) < limit:
+                heapq.heappush(heap, item)
+            elif pid < heap[0][1]:
+                heapq.heapreplace(heap, item)
+    selected = sorted((item[2] for item in heap), key=lambda item: item["pid"])
+    return [
+        _public_process_record(
+            record,
+            source="procfs",
+            msys_owned=False,
+        )
+        for record in selected
+    ], eligible_count > limit
 
 
 def _is_i18n_environment_name(name: str) -> bool:
@@ -561,6 +735,7 @@ class Msysd:
         self._runtime_lock_fd: int | None = None
         self.memory_reclaim_policy = MemoryReclaimPolicy.from_profile(self.profile)
         self.meminfo_path = DEFAULT_MEMINFO_PATH
+        self.proc_root = DEFAULT_PROC_ROOT
         self._presentation_catalogs = PresentationCatalogCache()
 
     def _track_task(self, coro: Any) -> asyncio.Task[Any]:
@@ -2199,6 +2374,116 @@ class Msysd:
             return False
         mode = str(component.windowing.get("mode", ""))
         return mode in {"window", "fullscreen"}
+
+    @staticmethod
+    def _component_has_gui_window(component: Component) -> bool:
+        """Return whether a manifest declares any user-visible window surface."""
+
+        mode = str(component.windowing.get("mode", "")).strip().casefold()
+        system = str(component.windowing.get("system", "")).strip().casefold()
+        if mode in {"window", "fullscreen", "overlay"}:
+            return True
+        if system in {"x11", "wayland"} and mode not in {"", "none", "headless"}:
+            return True
+        role_windows = component.raw.get("x-msys-role-windows")
+        return isinstance(role_windows, dict) and bool(role_windows)
+
+    def _process_list_snapshot(
+        self,
+        *,
+        include_system: bool,
+        system_limit: int,
+    ) -> dict[str, Any]:
+        """Build one bounded headless-component and optional procfs snapshot."""
+
+        live: list[tuple[str, Instance, int]] = []
+        for key, instance in sorted(self.instances.items()):
+            process = instance.process
+            if process is None or process.poll() is not None:
+                continue
+            pid = getattr(process, "pid", None)
+            if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+                continue
+            live.append((key, instance, pid))
+
+        proc_root = getattr(self, "proc_root", DEFAULT_PROC_ROOT)
+        supervisor_pid = os.getpid()
+        core_record = _proc_process_record(supervisor_pid, proc_root)
+        if core_record is None:
+            core_record = {
+                "pid": supervisor_pid,
+                "ppid": None,
+                "uid": None,
+                "name": "msysd",
+                "state": "unknown",
+                "rss_kib": None,
+            }
+        managed_leaders = {pid for _key, _instance, pid in live}
+        managed = [
+            _public_process_record(
+                core_record,
+                source="msys-core",
+                msys_owned=True,
+                component="msys.core",
+                component_state="ready",
+                runtime="python",
+                lifecycle="supervisor",
+            )
+        ]
+        managed_eligible = 1
+        for key, instance, pid in live:
+            component = instance.component
+            if self._component_has_gui_window(component):
+                continue
+            managed_eligible += 1
+            if len(managed) >= MAX_MANAGED_PROCESS_RESULTS:
+                continue
+            record = _proc_process_record(pid, proc_root)
+            if record is None:
+                # The supervisor remains authoritative while poll() reports a
+                # live generation. Keep the identity but do not invent procfs
+                # fields when permission or an exit race prevents the read.
+                record = {
+                    "pid": pid,
+                    "ppid": None,
+                    "uid": None,
+                    "name": _bounded_process_name(key, str(pid)),
+                    "state": "unknown",
+                    "rss_kib": None,
+                }
+            managed.append(
+                _public_process_record(
+                    record,
+                    source="msys-supervisor",
+                    msys_owned=True,
+                    component=key,
+                    component_state=instance.state,
+                    runtime=component.runtime,
+                    lifecycle=component.lifecycle,
+                    generation=instance.generation,
+                )
+            )
+
+        system: list[dict[str, Any]] = []
+        system_truncated = False
+        if include_system:
+            system, system_truncated = system_process_snapshot(
+                managed_leaders,
+                proc_root=proc_root,
+                limit=system_limit,
+                supervisor_pid=supervisor_pid,
+            )
+        return {
+            "schema": PROCESS_LIST_SCHEMA,
+            "filter": "headless-msys",
+            "include_system": include_system,
+            "system_limit": system_limit,
+            "managed_count": len(managed),
+            "system_count": len(system),
+            "managed_truncated": managed_eligible > len(managed),
+            "system_truncated": system_truncated,
+            "processes": [*managed, *system],
+        }
 
     def _is_launchable(self, component: Component) -> bool:
         explicit = component.activation.get("launchable")
@@ -5397,6 +5682,54 @@ class Msysd:
                 "payload": {
                     "components": [self._component_summary(key, c) for key, c in sorted(self.components.items())]
                 },
+            }
+        if method == "list_processes":
+            request = msg.get("payload", {})
+            if not isinstance(request, dict):
+                return {
+                    "type": "error",
+                    "id": msg.get("id", 0),
+                    "code": "BAD_PAYLOAD",
+                    "message": "process list payload must be an object",
+                }
+            unknown = set(request) - {"include_system", "limit"}
+            include_system = request.get("include_system", False)
+            limit = request.get("limit", DEFAULT_SYSTEM_PROCESS_LIMIT)
+            if unknown:
+                return {
+                    "type": "error",
+                    "id": msg.get("id", 0),
+                    "code": "BAD_PAYLOAD",
+                    "message": "unknown process list field",
+                }
+            if not isinstance(include_system, bool):
+                return {
+                    "type": "error",
+                    "id": msg.get("id", 0),
+                    "code": "BAD_PAYLOAD",
+                    "message": "include_system must be boolean",
+                }
+            if (
+                isinstance(limit, bool)
+                or not isinstance(limit, int)
+                or not 1 <= limit <= MAX_SYSTEM_PROCESS_LIMIT
+            ):
+                return {
+                    "type": "error",
+                    "id": msg.get("id", 0),
+                    "code": "BAD_PAYLOAD",
+                    "message": (
+                        "process list limit must be an integer between 1 and "
+                        f"{MAX_SYSTEM_PROCESS_LIMIT}"
+                    ),
+                }
+            return {
+                "type": "return",
+                "id": msg.get("id", 0),
+                "payload": self._process_list_snapshot(
+                    include_system=include_system,
+                    system_limit=limit,
+                ),
             }
         if method == "isolation_capabilities":
             capabilities = detect_capabilities(self._seccomp_helper())
