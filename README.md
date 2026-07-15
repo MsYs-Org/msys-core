@@ -1,6 +1,6 @@
 # msys-core
 
-Current source version: `0.1.16`.
+Current source version: `0.1.17`.
 
 `msys-core` contains the MSYS supervisor and broker. It is intentionally
 self-contained: no systemd, no D-Bus, no logind, no polkit, no udev API.

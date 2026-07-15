@@ -75,6 +75,7 @@ DISPLAY_FAILURE_QUARANTINE_GRACE_SECONDS = 15.0
 ACCESS_DENIED = "ACCESS_DENIED"
 DEFAULT_MEMINFO_PATH = Path("/proc/meminfo")
 CATALOG_TRANSACTION_SCHEMA = "msys.catalog-transaction.v1"
+APPLICATION_NAVIGATION_INTERFACE = "org.msys.application-navigation.v1"
 
 # Locale values are part of the visual-session contract, not application
 # configuration.  Keep the list deliberately small and POSIX-compatible:
@@ -4927,6 +4928,86 @@ class Msysd:
         method = msg.get("method")
         if method == "activate_role":
             return await self._activate_role_call(msg)
+        if method == "navigation_back":
+            request_id = msg.get("id", 0)
+            entries = self._foreground_entries()
+            if not entries:
+                return {
+                    "type": "return",
+                    "id": request_id,
+                    "payload": {
+                        "handled": False,
+                        "fallback": True,
+                        "reason": "no-foreground-application",
+                    },
+                }
+            component_id = str(entries[0].get("component") or "")
+            component = self.components.get(component_id)
+            supports_navigation = component is not None and any(
+                provide.kind == "interface"
+                and provide.name == APPLICATION_NAVIGATION_INTERFACE
+                for provide in component.provides
+            )
+            if not supports_navigation:
+                return {
+                    "type": "return",
+                    "id": request_id,
+                    "payload": {
+                        "handled": False,
+                        "fallback": True,
+                        "component": component_id,
+                        "reason": "interface-not-provided",
+                    },
+                }
+            instance = self.instances.get(component_id)
+            if instance is None or not instance.sock or not instance.ready:
+                return {
+                    "type": "return",
+                    "id": request_id,
+                    "payload": {
+                        "handled": False,
+                        "fallback": False,
+                        "component": component_id,
+                        "reason": "navigation-provider-unavailable",
+                    },
+                }
+            forwarded = {
+                "type": "call",
+                "id": request_id,
+                "target": f"component:{component_id}",
+                "method": "navigation_back",
+                "payload": {},
+            }
+            if "deadline_ms" in msg:
+                forwarded["deadline_ms"] = msg["deadline_ms"]
+            response = await self._forward_call(
+                instance,
+                forwarded,
+                source="msys.core",
+            )
+            if response.get("type") != "return":
+                return {
+                    "type": "return",
+                    "id": request_id,
+                    "payload": {
+                        "handled": False,
+                        "fallback": False,
+                        "component": component_id,
+                        "reason": str(response.get("code") or "navigation-call-failed"),
+                    },
+                }
+            result = response.get("payload", {})
+            handled = isinstance(result, dict) and result.get("handled") is True
+            return {
+                "type": "return",
+                "id": request_id,
+                "payload": {
+                    "handled": handled,
+                    "fallback": not handled,
+                    "component": component_id,
+                    "result": result if isinstance(result, dict) else {},
+                },
+            }
         if method == "discover":
             raw_payload = msg.get("payload", {})
             if not isinstance(raw_payload, dict):
