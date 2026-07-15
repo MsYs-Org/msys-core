@@ -89,6 +89,10 @@ SESSION_PREFERENCES_TOPIC = "msys.session.preferences.changed"
 PROCESS_LIST_SCHEMA = "msys.process-list.v1"
 DEFAULT_SYSTEM_PROCESS_LIMIT = 64
 MAX_SYSTEM_PROCESS_LIMIT = 128
+MAX_LOGICAL_TARGET_LENGTH = 192
+LOGICAL_TARGET_PATTERN = re.compile(
+    rf"^(?:role|interface|component):[A-Za-z0-9][A-Za-z0-9._:-]{{0,{MAX_LOGICAL_TARGET_LENGTH - 2}}}$"
+)
 MAX_MANAGED_PROCESS_RESULTS = 128
 MAX_PROCESS_NAME_LENGTH = 64
 
@@ -3968,6 +3972,13 @@ class Msysd:
                 "payload": msg.get("payload", {}),
                 "source": source,
             }
+            logical_target = msg.get("target")
+            if (
+                isinstance(logical_target, str)
+                and len(logical_target) <= MAX_LOGICAL_TARGET_LENGTH
+                and LOGICAL_TARGET_PATTERN.fullmatch(logical_target)
+            ):
+                forwarded["logical_target"] = logical_target
             if "deadline_ms" in msg:
                 forwarded["deadline_ms"] = msg["deadline_ms"]
             timeout = forwarded_timeout_seconds(msg)

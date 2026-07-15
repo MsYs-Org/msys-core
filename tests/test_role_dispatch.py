@@ -9,6 +9,7 @@ from unittest import mock
 
 from msys_core.manifest import Component
 from msys_core.msysd import Instance, Msysd, forwarded_timeout_seconds
+from msys_core.protocol import decode
 
 
 def provider(name: str):
@@ -51,6 +52,97 @@ class FakeRoleDaemon:
 
 
 class RoleDispatchContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_forward_preserves_bounded_logical_route_without_changing_target(self) -> None:
+        class CaptureSocket:
+            def __init__(self) -> None:
+                self.packet = None
+
+            def sendall(self, data: bytes) -> None:
+                self.packet = decode(data)
+
+        component = Component(
+            package_id="org.example.provider",
+            package_version="1.0.0",
+            id="main",
+            exec=["true"],
+            lifecycle="on-demand",
+        )
+        daemon = object.__new__(Msysd)
+        daemon.next_request_id = 1
+        socket = CaptureSocket()
+        selected = Instance(
+            component=component,
+            generation=1,
+            sock=socket,  # type: ignore[arg-type]
+            ready=True,
+        )
+        task = asyncio.create_task(Msysd._forward_call(
+            daemon,
+            selected,
+            {
+                "type": "call",
+                "id": 4,
+                "target": "role:notification-center",
+                "method": "show",
+                "payload": {},
+                "deadline_ms": int(time.monotonic() * 1000 + 1000),
+            },
+            "test",
+        ))
+        await asyncio.sleep(0)
+        self.assertIsNotNone(socket.packet)
+        self.assertEqual(socket.packet["target"], component.key)
+        self.assertEqual(
+            socket.packet["logical_target"], "role:notification-center"
+        )
+        selected.pending_calls[1].set_result({
+            "type": "return", "id": 1, "payload": {"ok": True}
+        })
+        self.assertEqual((await task)["type"], "return")
+
+    async def test_invalid_logical_route_is_not_forwarded(self) -> None:
+        class CaptureSocket:
+            def __init__(self) -> None:
+                self.packet = None
+
+            def sendall(self, data: bytes) -> None:
+                self.packet = decode(data)
+
+        component = Component(
+            package_id="org.example.provider",
+            package_version="1.0.0",
+            id="main",
+            exec=["true"],
+            lifecycle="on-demand",
+        )
+        daemon = object.__new__(Msysd)
+        daemon.next_request_id = 1
+        socket = CaptureSocket()
+        selected = Instance(
+            component=component,
+            generation=1,
+            sock=socket,  # type: ignore[arg-type]
+            ready=True,
+        )
+        task = asyncio.create_task(Msysd._forward_call(
+            daemon,
+            selected,
+            {
+                "type": "call",
+                "id": 5,
+                "target": "role:" + "x" * 300,
+                "method": "show",
+                "deadline_ms": int(time.monotonic() * 1000 + 1000),
+            },
+            "test",
+        ))
+        await asyncio.sleep(0)
+        self.assertNotIn("logical_target", socket.packet)
+        selected.pending_calls[1].set_result({
+            "type": "return", "id": 1, "payload": {"ok": True}
+        })
+        await task
+
     async def test_cold_start_deadline_expiry_does_not_stop_role_provider(self) -> None:
         daemon = FakeRoleDaemon([{
             "type": "error",

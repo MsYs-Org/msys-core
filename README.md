@@ -1,6 +1,12 @@
 # msys-core
 
-Current source version: `0.1.22`.
+Current source version: `0.1.23`.
+
+Version 0.1.23 adds the optional, bounded `logical_target` field to provider
+call frames. The existing provider-owned `target` remains unchanged, while a
+multi-role component can distinguish such otherwise-identical calls as
+`role:task-switcher.show` and `role:notification-center.show`. Only validated
+role/interface/component routes of at most 192 characters are forwarded.
 
 Version 0.1.22 adds one small persistent visual-session language preference.
 `get_session_preferences` and `set_session_preferences` store a canonical
