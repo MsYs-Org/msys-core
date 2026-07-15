@@ -776,7 +776,9 @@ private:
         auto& state = runtime_[index];
         state.readiness_poll = reactor_.add_timer(
             10ms,
-            50ms,
+            // This timer only exists while an X11 component is starting.
+            // Keep the hand-off responsive without adding resident polling.
+            20ms,
             [this, index, generation](std::uint64_t) {
                 const auto& current = runtime_[index];
                 if (current.generation == generation

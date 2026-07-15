@@ -60,6 +60,9 @@ ROLE_LIVENESS_ERRORS = {
 }
 MAX_FORWARD_TIMEOUT_SECONDS = 300.0
 CALL_DEADLINE_EXPIRED_MESSAGE = "call deadline already expired"
+ROLE_SWITCH_CLEANUP_BUDGET_SECONDS = 0.025
+PROCESS_EXIT_FALLBACK_POLL_SECONDS = 0.02
+X11_READINESS_POLL_SECONDS = 0.02
 TRANSITION_PHASES = frozenset({"launching", "launched", "closing", "closed", "failed"})
 MAX_SUBSCRIPTIONS = 128
 DEFAULT_X11_DISPLAY = ":0"
@@ -2608,7 +2611,11 @@ class Msysd:
                     self._component_became_ready(instance)
                     print(f"msysd: ready {component.key} display={display}", flush=True)
                     return
-            await asyncio.sleep(0.05)
+            # This fallback probe only exists while an X server generation is
+            # starting.  A 50 ms interval was visible when switching display
+            # providers on the small target; 20 ms keeps the stat/xdpyinfo
+            # work bounded while removing most of that fixed hand-off delay.
+            await asyncio.sleep(X11_READINESS_POLL_SECONDS)
         if instance.ready or self.instances.get(component.key) is not instance:
             return
         print(f"msysd: readiness timeout {component.key}", flush=True)
@@ -2618,13 +2625,7 @@ class Msysd:
         process = instance.process
         if not process:
             return
-        # A blocking process.wait() in the default executor consumes one worker
-        # for the complete lifetime of every background component.  Small
-        # targets commonly have an eight-thread default executor, so enough
-        # resident components used to starve mIPC socket readers completely.
-        # poll() is non-blocking and also reaps the child once it exits.
-        while process.poll() is None:
-            await asyncio.sleep(0.1)
+        await self._wait_for_process_exit(process)
         rc = process.returncode or 0
         if self.instances.get(instance.component.key) is not instance:
             return
@@ -2634,6 +2635,44 @@ class Msysd:
                 instance.state = "display-wait"
                 return
             await self._restart_later(instance)
+
+    @staticmethod
+    async def _wait_for_process_exit(process: subprocess.Popen[bytes]) -> None:
+        """Wait for one owned child without occupying a worker thread.
+
+        Linux pidfds turn child exit into an epoll-ready descriptor, matching
+        the existing C++ native-lite reactor.  Python/old-kernel builds without
+        ``pidfd_open`` retain a short non-blocking poll fallback.  ``poll()``
+        is still called after the readiness edge so ``Popen.returncode`` is
+        populated and the direct child is reaped by its owner.
+        """
+
+        if process.poll() is not None:
+            return
+        pidfd_open = getattr(os, "pidfd_open", None)
+        pidfd = -1
+        if pidfd_open is not None:
+            try:
+                pidfd = pidfd_open(process.pid, 0)
+            except (OSError, TypeError, ValueError):
+                pidfd = -1
+        if pidfd >= 0:
+            loop = asyncio.get_running_loop()
+            exited = asyncio.Event()
+            try:
+                loop.add_reader(pidfd, exited.set)
+                # pidfds are level-triggered: an exit that races between the
+                # initial poll and add_reader still makes this await complete.
+                if process.poll() is None:
+                    await exited.wait()
+                process.poll()
+                return
+            finally:
+                loop.remove_reader(pidfd)
+                os.close(pidfd)
+
+        while process.poll() is None:
+            await asyncio.sleep(PROCESS_EXIT_FALLBACK_POLL_SECONDS)
 
     async def _finalize_exited_instance(
         self,
@@ -3362,6 +3401,24 @@ class Msysd:
             ],
         }
 
+    async def _cleanup_switched_role_provider(
+        self,
+        provider: str,
+        instance: Instance,
+    ) -> str | None:
+        """Retire a provider after its role lease has moved elsewhere."""
+
+        try:
+            await self.stop_component(provider, expected=instance)
+        except Exception as exc:
+            message = str(exc)
+            print(
+                f"msysd: role switch cleanup failed provider={provider}: {message}",
+                flush=True,
+            )
+            return message
+        return None
+
     async def _switch_role(self, role: str, provider: str, *, preference_mode: str) -> dict[str, Any]:
         for _attempt in range(3):
             async with self.catalog_lock:
@@ -3385,6 +3442,26 @@ class Msysd:
                 old_preferred = registry.preferred_provider(role)
                 old_override_present = role in self.role_preference_overrides
                 old_override = self.role_preference_overrides.get(role)
+                unchanged = (
+                    old_active == provider
+                    and old_preferred == provider
+                    and (
+                        (
+                            preference_mode == "select"
+                            and old_override_present
+                            and old_override == provider
+                        )
+                        or (
+                            preference_mode == "reset"
+                            and not old_override_present
+                        )
+                    )
+                )
+                if unchanged:
+                    # Re-selecting the live provider is a common Settings
+                    # action.  Do not rewrite flash or churn leases when the
+                    # requested durable state is already exact.
+                    return self._role_summary(role)
                 try:
                     if preference_mode == "select":
                         registry.select_preferred(role, provider)
@@ -3431,18 +3508,39 @@ class Msysd:
                     raise
 
             cleanup_error: str | None = None
-            if old_active and old_active != provider and not still_active:
-                try:
-                    await self.stop_component(old_active, expected=old_instance)
-                except Exception as exc:
-                    cleanup_error = str(exc)
-                    print(f"msysd: role switch cleanup failed provider={old_active}: {exc}", flush=True)
+            cleanup_pending = False
+            if (
+                old_active
+                and old_active != provider
+                and not still_active
+                and old_instance is not None
+            ):
+                # The new provider is ready and owns the lease at this point;
+                # keeping the control response behind the old provider's full
+                # SIGTERM/SIGKILL grace period only makes Settings appear
+                # frozen.  Give cooperative exits a tiny inline budget, then
+                # finish retiring the exact old generation in the supervisor
+                # task set.  Routing cannot return to it because its lease was
+                # released before this task was created.
+                cleanup_task = self._track_task(
+                    self._cleanup_switched_role_provider(old_active, old_instance)
+                )
+                done, pending = await asyncio.wait(
+                    {cleanup_task},
+                    timeout=ROLE_SWITCH_CLEANUP_BUDGET_SECONDS,
+                )
+                if done:
+                    cleanup_error = cleanup_task.result()
+                else:
+                    cleanup_pending = bool(pending)
             async with self.catalog_lock:
                 if self.role_registry is registry:
                     summary = self._role_summary(role)
             print(f"msysd: role switched role={role} provider={provider}", flush=True)
             if cleanup_error:
                 summary["cleanup_error"] = cleanup_error
+            if cleanup_pending:
+                summary["cleanup_pending"] = old_active
             return summary
         raise RuntimeError(f"role catalog changed repeatedly while switching {role}")
 
