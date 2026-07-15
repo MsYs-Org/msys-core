@@ -312,7 +312,7 @@ def system_process_snapshot(
         raise ValueError("system process limit is out of range")
     if supervisor_pid is None:
         supervisor_pid = os.getpid()
-    heap: list[tuple[int, int, dict[str, Any]]] = []
+    heap: list[tuple[int, int, int, dict[str, Any]]] = []
     eligible_count = 0
     try:
         entries = os.scandir(proc_root)
@@ -333,13 +333,33 @@ def system_process_snapshot(
                 or record["session"] in managed_leader_pids
             ):
                 continue
+            if record["rss_kib"] is None and (
+                pid == 2 or record["ppid"] == 2
+            ):
+                # Linux kernel threads have no userspace RSS and are normally
+                # parented by kthreadd. They are not actionable in Settings
+                # and must not consume the bounded userspace result budget.
+                continue
             eligible_count += 1
-            item = (-pid, pid, record)
+            rss_kib = record["rss_kib"]
+            item = (
+                1 if rss_kib is not None else 0,
+                int(rss_kib or 0),
+                -pid,
+                record,
+            )
             if len(heap) < limit:
                 heapq.heappush(heap, item)
-            elif pid < heap[0][1]:
+            elif item[:3] > heap[0][:3]:
                 heapq.heapreplace(heap, item)
-    selected = sorted((item[2] for item in heap), key=lambda item: item["pid"])
+    selected = sorted(
+        (item[3] for item in heap),
+        key=lambda item: (
+            item["rss_kib"] is None,
+            -int(item["rss_kib"] or 0),
+            item["pid"],
+        ),
+    )
     return [
         _public_process_record(
             record,
@@ -2418,6 +2438,7 @@ class Msysd:
                 "state": "unknown",
                 "rss_kib": None,
             }
+        core_record["name"] = "MSYS Core"
         managed_leaders = {pid for _key, _instance, pid in live}
         managed = [
             _public_process_record(
@@ -2451,6 +2472,10 @@ class Msysd:
                     "state": "unknown",
                     "rss_kib": None,
                 }
+            presentation_name, _summary = self._localized_component_presentation(
+                key, component
+            )
+            record["name"] = _bounded_process_name(presentation_name, key)
             managed.append(
                 _public_process_record(
                     record,

@@ -1,6 +1,6 @@
 [project]
 name = "msys-core"
-version = "0.1.19"
+version = "0.1.20"
 description = "MSYS self-contained supervisor and IPC broker"
 requires-python = ">=3.10"
 dependencies = []

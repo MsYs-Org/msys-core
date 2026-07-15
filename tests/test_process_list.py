@@ -39,11 +39,15 @@ class LiveProcess:
 def component(
     component_id: str,
     *,
+    display_name: str | None = None,
     lifecycle: str = "background",
     windowing: dict[str, object] | None = None,
     role_windows: bool = False,
 ) -> Component:
-    raw: dict[str, object] = {"id": component_id}
+    raw: dict[str, object] = {
+        "id": component_id,
+        "name": display_name or component_id.title(),
+    }
     if role_windows:
         raw["x-msys-role-windows"] = {
             "navigation-bar": {"system": "x11", "mode": "overlay"}
@@ -136,7 +140,10 @@ class ProcessListTests(unittest.TestCase):
                 root, 400, name="shell", ppid=50, group=400, session=400,
             )
             daemon = self.daemon(root)
-            self.add_instance(daemon, component("hal"), 100, generation=7)
+            self.add_instance(
+                daemon, component("hal", display_name="硬件服务"), 100,
+                generation=7,
+            )
             self.add_instance(
                 daemon,
                 component(
@@ -170,6 +177,7 @@ class ProcessListTests(unittest.TestCase):
         self.assertEqual(set(core), PUBLIC_FIELDS)
         self.assertEqual(core["source"], "msys-core")
         self.assertTrue(core["msys_owned"])
+        self.assertEqual(core["name"], "MSYS Core")
         self.assertEqual(core["component_state"], "ready")
         self.assertEqual(core["lifecycle"], "supervisor")
         process = next(
@@ -181,7 +189,7 @@ class ProcessListTests(unittest.TestCase):
         self.assertEqual(process["generation"], 7)
         self.assertEqual(process["source"], "msys-supervisor")
         self.assertTrue(process["msys_owned"])
-        self.assertEqual(process["name"], "hal-worker")
+        self.assertEqual(process["name"], "硬件服务")
         self.assertEqual(process["rss_kib"], 2048)
 
     def test_include_system_excludes_every_msys_process_group_and_is_bounded(self) -> None:
@@ -296,6 +304,47 @@ class ProcessListTests(unittest.TestCase):
         self.assertEqual(processes[0]["state"], "running")
         self.assertEqual(processes[0]["rss_kib"], 456)
         self.assertEqual(len(processes[0]["name"]), 64)
+
+    def test_system_results_filter_kernel_threads_and_prioritize_rss(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            proc_process(
+                root, 2, name="kthreadd", ppid=0, group=2, session=2,
+                uid=0, rss_kib=None,
+            )
+            proc_process(
+                root, 20, name="kworker/0:1", ppid=2, group=20, session=2,
+                uid=0, rss_kib=None,
+            )
+            proc_process(
+                root, 10, name="no-rss-user", ppid=1, group=10, session=10,
+                rss_kib=None,
+            )
+            proc_process(
+                root, 30, name="small", ppid=1, group=30, session=30,
+                rss_kib=100,
+            )
+            proc_process(
+                root, 50, name="large-later", ppid=1, group=50, session=50,
+                rss_kib=900,
+            )
+            proc_process(
+                root, 40, name="large-first", ppid=1, group=40, session=40,
+                rss_kib=900,
+            )
+            proc_process(
+                root, 60, name="tiny", ppid=1, group=60, session=60,
+                rss_kib=50,
+            )
+
+            processes, truncated = system_process_snapshot(
+                set(), proc_root=root, limit=3, supervisor_pid=999,
+            )
+
+        self.assertTrue(truncated)
+        self.assertEqual([item["pid"] for item in processes], [40, 50, 30])
+        self.assertNotIn(2, [item["pid"] for item in processes])
+        self.assertNotIn(20, [item["pid"] for item in processes])
 
 
 if __name__ == "__main__":

@@ -1,6 +1,11 @@
 # msys-core
 
-Current source version: `0.1.19`.
+Current source version: `0.1.20`.
+
+Version 0.1.20 presents supervised entries with Core's localized component
+name instead of the often-identical Linux `comm` value, filters non-userspace
+kernel threads, and orders optional system results by known RSS descending
+then PID so the bounded list remains useful on a small board.
 
 Version 0.1.19 adds the bounded, read-only `msys.core.list_processes` process
 inventory described below. It reuses Core's live component generations and
@@ -180,7 +185,9 @@ private anonymous memory by about 4.2 MiB; neither is enabled.
 components whose manifest declares no X11/Wayland/window/overlay surface.
 This default path is small and does not enumerate unrelated Linux processes.
 Each result has the same closed fields; Core uses `source: "msys-core"`,
-`component: "msys.core"`, and `lifecycle: "supervisor"`:
+`component: "msys.core"`, `name: "MSYS Core"`, and
+`lifecycle: "supervisor"`. Other managed names use the same localized
+component presentation as `list_components`:
 
 ```json
 {
@@ -211,9 +218,11 @@ headless results are independently capped at 128. Top-level
 `managed_truncated` and `system_truncated` fields make either bound explicit.
 System entries use `source: "procfs"`, `msys_owned: false`, and null MSYS-only
 fields. Core excludes itself, every supervised leader, and descendants that
-share a supervised process group or session. Enumeration retains at most the
-requested number of proc records in memory, emits them in PID order, never
-returns command lines or environment values, and invokes no external command.
+share a supervised process group or session. Kernel threads parented by
+`kthreadd` with no userspace RSS are omitted. Enumeration retains at most the
+requested number of proc records in memory, prioritizes known RSS values in
+descending order with PID as the stable tie-breaker, never returns command
+lines or environment values, and invokes no external command.
 
 The checked-in `examples/config/manifests/shell-native.json` is a generated
 development fallback. It preserves the canonical package semantics while
