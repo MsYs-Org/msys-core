@@ -32,6 +32,22 @@ def valid_profile() -> dict:
 
 
 class ProfileContractTests(unittest.TestCase):
+    def test_all_reference_profiles_route_audio_without_hard_startup_dependency(self) -> None:
+        config = Path(__file__).resolve().parents[1] / "examples" / "config"
+        audio_manager = "org.msys.audio.bluez:audio-manager"
+        for profile_id in (
+            "desktop-hdmi",
+            "desktop-spi",
+            "kiosk-spi",
+            "mobile-hdmi",
+            "mobile-spi-pill",
+            "mobile-spi",
+        ):
+            with self.subTest(profile_id=profile_id):
+                profile = load_profile(config, profile_id)
+                self.assertEqual(profile["roles"]["audio-manager"], [audio_manager])
+                self.assertNotIn(audio_manager, profile["startup"])
+
     def test_complete_profile_and_extensions_are_valid(self) -> None:
         profile = valid_profile()
         self.assertIs(validate_profile(profile, expected_id="mobile-test"), profile)

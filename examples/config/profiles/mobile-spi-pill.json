@@ -46,6 +46,9 @@
                   "update-agent":  [
                                        "org.msys.core.install:update-agent"
                                    ],
+                  "audio-manager":  [
+                                        "org.msys.audio.bluez:audio-manager"
+                                    ],
                   "display-output":  [
                                          "org.msys.openstick.ch347:x11-spi-touch-output"
                                      ],
