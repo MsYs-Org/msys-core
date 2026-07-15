@@ -1,6 +1,13 @@
 # msys-core
 
-Current source version: `0.1.21`.
+Current source version: `0.1.22`.
+
+Version 0.1.22 adds one small persistent visual-session language preference.
+`get_session_preferences` and `set_session_preferences` store a canonical
+`MSYS_LOCALE` under the existing state root and publish
+`msys.session.preferences.changed`; no locale daemon, D-Bus, X11 restart, or
+display-provider restart is involved. New components inherit the selection and
+live subscribers can redraw in place.
 
 Version 0.1.21 separates mobile Back from application termination. A window
 policy can retain the current task with `background_component`, while the
@@ -312,6 +319,14 @@ applications can agree without a locale daemon, systemd, or D-Bus.  Add
 `MSYS_LOCALE` to a profile's `env` when an operator needs an explicit
 deployment-wide MSYS language selection; `C`/`POSIX` retains the
 catalog-default behavior.
+
+At runtime, a component with `mipc.call:msys.core` may call
+`set_session_preferences` with `{"language":"zh-CN"}` (or another canonical
+locale). `{"language":"system"}` returns to the profile/inherited locale. The
+atomic preference is stored at `preferences/session.json` below the configured
+state root and the change event lets a native shell update in place. Existing
+third-party applications are not force-restarted; they receive the new locale
+on their next normal launch unless they subscribe to the event themselves.
 
 `list_apps` and `list_components` also apply that session locale to the
 package/component `x-msys-i18n` presentation declaration. Catalogs are strict

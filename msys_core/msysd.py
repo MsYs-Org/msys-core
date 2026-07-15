@@ -84,6 +84,8 @@ CATALOG_TRANSACTION_SCHEMA = "msys.catalog-transaction.v1"
 APPLICATION_NAVIGATION_INTERFACE = "org.msys.application-navigation.v1"
 APPLICATION_CRASH_SCHEMA = "msys.application-crash.v1"
 APPLICATION_CRASH_TOPIC = "msys.notification.post"
+SESSION_PREFERENCES_SCHEMA = "msys.session-preferences.v1"
+SESSION_PREFERENCES_TOPIC = "msys.session.preferences.changed"
 PROCESS_LIST_SCHEMA = "msys.process-list.v1"
 DEFAULT_SYSTEM_PROCESS_LIMIT = 64
 MAX_SYSTEM_PROCESS_LIMIT = 128
@@ -708,6 +710,8 @@ class Msysd:
         self.components = dict(self.builtin_components)
         self.profile = load_profile(config, profile_id)
         self.state_dir = Path(str(self.profile.get("state_dir") or os.environ.get("MSYS_STATE_DIR", "/opt/msys-state")))
+        self.session_language = "system"
+        self._load_session_preferences()
         installed_components = load_installed_manifests(self.state_dir)
         # A committed version replaces its complete built-in package. This also
         # removes components deleted by an update; the immutable built-in stays
@@ -1165,6 +1169,9 @@ class Msysd:
         if isinstance(profile_env, dict):
             env.update({str(key): str(value) for key, value in profile_env.items()})
         locale_environment = _supervisor_locale_environment(env)
+        session_language = getattr(self, "session_language", "system")
+        if session_language != "system":
+            locale_environment["MSYS_LOCALE"] = session_language
         env["DISPLAY"] = self._session_display()
         env.update(component.env)
         # Package manifests are not a global language preference mechanism.
@@ -1443,6 +1450,83 @@ class Msysd:
     @property
     def _role_preferences_path(self) -> Path:
         return self.state_dir / "preferences" / "roles.json"
+
+    @property
+    def _session_preferences_path(self) -> Path:
+        return self.state_dir / "preferences" / "session.json"
+
+    @staticmethod
+    def _validate_session_language(value: object) -> str:
+        language = str(value).strip()
+        if language == "system":
+            return language
+        normalized = _normalize_msys_locale(language)
+        if normalized is None or normalized != language:
+            raise ValueError("language must be system or a canonical locale")
+        return normalized
+
+    def _load_session_preferences(self) -> None:
+        try:
+            data = json.loads(self._session_preferences_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, UnicodeError, json.JSONDecodeError):
+            return
+        if not isinstance(data, dict) or data.get("schema") != SESSION_PREFERENCES_SCHEMA:
+            return
+        try:
+            self.session_language = self._validate_session_language(
+                data.get("language", "system")
+            )
+        except ValueError as exc:
+            print(f"msysd: ignored session language: {exc}", flush=True)
+
+    def _persist_session_preferences(self) -> None:
+        path = self._session_preferences_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+        document = {
+            "schema": SESSION_PREFERENCES_SCHEMA,
+            "language": self.session_language,
+        }
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                0o600,
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                descriptor = -1
+                json.dump(document, stream, ensure_ascii=False, separators=(",", ":"))
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
+    def _profile_session_locale(self) -> str | None:
+        environment = os.environ.copy()
+        profile = getattr(self, "profile", {})
+        profile_environment = profile.get("env", {}) if isinstance(profile, dict) else {}
+        if isinstance(profile_environment, dict):
+            environment.update(
+                {str(key): str(value) for key, value in profile_environment.items()}
+            )
+        return _supervisor_locale_environment(environment).get("MSYS_LOCALE")
+
+    def _session_preferences_payload(self) -> dict[str, Any]:
+        language = getattr(self, "session_language", "system")
+        resolved = self._profile_session_locale() if language == "system" else language
+        return {
+            "schema": SESSION_PREFERENCES_SCHEMA,
+            "language": language,
+            "resolved_language": resolved or "",
+        }
 
     def _load_role_preferences(self) -> None:
         try:
@@ -2577,14 +2661,12 @@ class Msysd:
         cached = getattr(self, "_presentation_locale_value", None)
         if isinstance(cached, str) or cached is False:
             return cached if isinstance(cached, str) else None
-        environment = os.environ.copy()
-        profile = getattr(self, "profile", {})
-        profile_environment = profile.get("env", {}) if isinstance(profile, dict) else {}
-        if isinstance(profile_environment, dict):
-            environment.update(
-                {str(key): str(value) for key, value in profile_environment.items()}
-            )
-        locale = _supervisor_locale_environment(environment).get("MSYS_LOCALE")
+        session_language = getattr(self, "session_language", "system")
+        locale = (
+            self._profile_session_locale()
+            if session_language == "system"
+            else session_language
+        )
         # Profile/session locale is immutable for one supervisor generation.
         # Cache the string (or False as an explicit default-locale sentinel) so
         # list_apps does not repeatedly copy the process environment per App.
@@ -5472,6 +5554,69 @@ class Msysd:
         method = msg.get("method")
         if method == "activate_role":
             return await self._activate_role_call(msg)
+        if method == "get_session_preferences":
+            return {
+                "type": "return",
+                "id": msg.get("id", 0),
+                "payload": self._session_preferences_payload(),
+            }
+        if method == "set_session_preferences":
+            request_id = msg.get("id", 0)
+            payload = msg.get("payload", {})
+            if not isinstance(payload, dict):
+                return {
+                    "type": "error",
+                    "id": request_id,
+                    "code": "BAD_PAYLOAD",
+                    "message": "session preferences payload must be an object",
+                }
+            unknown = sorted(set(payload) - {"language"})
+            if unknown or "language" not in payload:
+                return {
+                    "type": "error",
+                    "id": request_id,
+                    "code": "BAD_SESSION_PREFERENCES",
+                    "message": (
+                        "set_session_preferences requires only language"
+                        if not unknown
+                        else "unknown session preference: " + ", ".join(unknown)
+                    ),
+                }
+            try:
+                language = self._validate_session_language(payload["language"])
+            except ValueError as exc:
+                return {
+                    "type": "error",
+                    "id": request_id,
+                    "code": "BAD_LANGUAGE",
+                    "message": str(exc),
+                }
+            previous = self.session_language
+            self.session_language = language
+            try:
+                self._persist_session_preferences()
+            except OSError as exc:
+                self.session_language = previous
+                return {
+                    "type": "error",
+                    "id": request_id,
+                    "code": "SESSION_PREFERENCES_WRITE_FAILED",
+                    "message": str(exc)[:512],
+                }
+            self.__dict__.pop("_presentation_locale_value", None)
+            result = self._session_preferences_payload()
+            result.update({"ok": True, "changed": previous != language})
+            if previous != language:
+                await self.broadcast(
+                    SESSION_PREFERENCES_TOPIC,
+                    result,
+                    source=source,
+                )
+            return {
+                "type": "return",
+                "id": request_id,
+                "payload": result,
+            }
         if method == "navigation_back":
             request_id = msg.get("id", 0)
             entries = self._foreground_entries()
