@@ -8,7 +8,7 @@ from msys_core import __version__
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_VERSION = "0.1.17"
+EXPECTED_VERSION = "0.1.18"
 
 
 class VersionConsistencyTests(unittest.TestCase):

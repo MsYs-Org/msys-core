@@ -74,6 +74,7 @@ DISPLAY_OUTPUT_ROLE = "display-output"
 DISPLAY_FAILURE_QUARANTINE_GRACE_SECONDS = 15.0
 ACCESS_DENIED = "ACCESS_DENIED"
 DEFAULT_MEMINFO_PATH = Path("/proc/meminfo")
+DEFAULT_PROC_ROOT = Path("/proc")
 CATALOG_TRANSACTION_SCHEMA = "msys.catalog-transaction.v1"
 APPLICATION_NAVIGATION_INTERFACE = "org.msys.application-navigation.v1"
 
@@ -87,6 +88,92 @@ _I18N_LOCALE_NAME = re.compile(
     r"(?:-(?:[A-Z]{2}|[0-9]{3}))?"
     r"(?:-(?:[a-z0-9]{5,8}|[0-9][a-z0-9]{3}))*$"
 )
+
+
+def _process_group_members(
+    leader_pid: int,
+    proc_root: Path = DEFAULT_PROC_ROOT,
+) -> list[int]:
+    """Return one component session's process group from bounded proc metadata."""
+
+    if leader_pid <= 0:
+        return []
+    members: list[int] = []
+    try:
+        entries = list(proc_root.iterdir())
+    except OSError:
+        return []
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            text = (entry / "stat").read_text(encoding="ascii", errors="replace")
+            fields = text[text.rindex(")") + 1 :].split()
+            process_group = int(fields[2])
+        except (OSError, ValueError, IndexError):
+            continue
+        if process_group == leader_pid:
+            members.append(int(entry.name))
+    return sorted(set(members))
+
+
+def _memory_values(path: Path) -> tuple[int | None, int | None]:
+    try:
+        text = path.read_text(encoding="ascii", errors="replace")
+    except OSError:
+        return None, None
+    values: dict[str, int] = {}
+    for name in ("Rss", "Pss"):
+        match = re.search(rf"(?m)^{name}:\s+([0-9]+)\s+kB\s*$", text)
+        if match is not None:
+            values[name] = int(match.group(1))
+    return values.get("Rss"), values.get("Pss")
+
+
+def _status_rss(path: Path) -> int | None:
+    try:
+        text = path.read_text(encoding="ascii", errors="replace")
+    except OSError:
+        return None
+    match = re.search(r"(?m)^VmRSS:\s+([0-9]+)\s+kB\s*$", text)
+    return int(match.group(1)) if match is not None else None
+
+
+def process_memory_snapshot(
+    leader_pid: int,
+    proc_root: Path = DEFAULT_PROC_ROOT,
+) -> dict[str, Any]:
+    """Sample RSS/PSS once for an explicitly requested component snapshot."""
+
+    members = _process_group_members(leader_pid, proc_root)
+    rss_values: list[int] = []
+    pss_values: list[int] = []
+    for pid in members:
+        rss, pss = _memory_values(proc_root / str(pid) / "smaps_rollup")
+        if rss is None:
+            rss = _status_rss(proc_root / str(pid) / "status")
+        if rss is not None:
+            rss_values.append(rss)
+        if pss is not None:
+            pss_values.append(pss)
+    rss_complete = bool(members) and len(rss_values) == len(members)
+    pss_complete = rss_complete and len(pss_values) == len(members)
+    return {
+        "schema": "msys.process-memory.v1",
+        "scope": "process-group",
+        "unit": "KiB",
+        "leader_pid": leader_pid,
+        "member_count": len(members),
+        "available": rss_complete,
+        "rss_kib": sum(rss_values) if rss_complete else None,
+        "pss_available": pss_complete,
+        "pss_kib": sum(pss_values) if pss_complete else None,
+        "reason": (
+            None
+            if pss_complete
+            else "pss-unavailable" if rss_complete else "memory-unavailable"
+        ),
+    }
 
 
 def _is_i18n_environment_name(name: str) -> bool:
@@ -2412,8 +2499,12 @@ class Msysd:
         self.foreground_stack = [item for item in self.foreground_stack if item != key]
         self.foreground_stack.insert(0, key)
 
-    def _foreground_entries(self) -> list[dict[str, str]]:
-        result = []
+    def _foreground_entries(
+        self,
+        *,
+        include_resources: bool = False,
+    ) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
         for key in self.foreground_stack:
             instance = self.instances.get(key)
             if not instance or not instance.process or instance.process.poll() is not None:
@@ -2422,12 +2513,16 @@ class Msysd:
             window_identity = ""
             if isinstance(identity, dict):
                 window_identity = str(identity.get("x11_wm_class") or identity.get("app_id") or "")
-            result.append({
+            entry: dict[str, Any] = {
                 "component": key,
                 "title": instance.component.raw.get("name") or key,
                 "identity": window_identity,
                 "state": instance.state,
-            })
+                "lifecycle": instance.component.lifecycle,
+            }
+            if include_resources:
+                entry["resources"] = process_memory_snapshot(instance.process.pid)
+            result.append(entry)
         return result
 
     async def _announce_foreground_closing(self) -> Instance | None:
@@ -5361,7 +5456,19 @@ class Msysd:
             await self.broadcast(payload.get("topic", ""), payload.get("payload", {}), source="core-call")
             return {"type": "return", "id": msg.get("id", 0), "payload": {"ok": True}}
         if method == "foreground_stack":
-            return {"type": "return", "id": msg.get("id", 0), "payload": {"windows": self._foreground_entries()}}
+            request = msg.get("payload", {})
+            include_resources = (
+                isinstance(request, dict) and request.get("include_resources") is True
+            )
+            return {
+                "type": "return",
+                "id": msg.get("id", 0),
+                "payload": {
+                    "windows": self._foreground_entries(
+                        include_resources=include_resources
+                    )
+                },
+            }
         return {"type": "error", "id": msg.get("id", 0), "code": "NO_METHOD", "message": str(method)}
 
     async def _x11_window_policy_call(self, msg: dict[str, Any]) -> dict[str, Any] | None:

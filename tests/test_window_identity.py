@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import types
 import unittest
+from unittest import mock
 
 from msys_core.manifest import Component
 from msys_core.msysd import Msysd
@@ -25,7 +26,7 @@ class ForegroundIdentityTests(unittest.TestCase):
                 },
             },
         )
-        process = types.SimpleNamespace(poll=lambda: None)
+        process = types.SimpleNamespace(pid=42, poll=lambda: None)
         daemon.instances = {
             component.key: types.SimpleNamespace(
                 component=component,
@@ -43,9 +44,22 @@ class ForegroundIdentityTests(unittest.TestCase):
                     "title": "Localized Viewer",
                     "identity": "OrgExampleViewer",
                     "state": "ready",
+                    "lifecycle": "manual",
                 }
             ],
         )
+
+        snapshot = {
+            "schema": "msys.process-memory.v1",
+            "rss_kib": 12000,
+            "pss_kib": 9000,
+        }
+        with mock.patch(
+            "msys_core.msysd.process_memory_snapshot", return_value=snapshot
+        ) as memory:
+            enriched = daemon._foreground_entries(include_resources=True)
+        memory.assert_called_once_with(42)
+        self.assertEqual(enriched[0]["resources"], snapshot)
 
 
 if __name__ == "__main__":
