@@ -1,6 +1,18 @@
 # msys-core
 
-Current source version: `0.1.20`.
+Current source version: `0.1.21`.
+
+Version 0.1.21 separates mobile Back from application termination. A window
+policy can retain the current task with `background_component`, while the
+explicit Close operation remains the only Core window-manager action that
+announces a closing transition. Ordinary manual/on-demand applications are
+never supervisor-restarted after a failure; Core instead publishes one
+`msys.application-crash.v1` payload on `msys.notification.post`. Restart
+policies are limited to eager system role/interface/capability providers.
+Hiding an input method or notification center that is not running is now an
+immediate no-op and does not cold-start its on-demand provider. Reference
+graphical profiles also explicitly export `MSYS_UI_FONT_FAMILY=Noto Sans CJK SC`
+so every toolkit receives the same CJK family selection.
 
 Version 0.1.20 presents supervised entries with Core's localized component
 name instead of the often-identical Linux `comm` value, filters non-userspace

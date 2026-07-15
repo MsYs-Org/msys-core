@@ -159,6 +159,63 @@ class LifecycleTransitionTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_manual_app_crash_notifies_once_and_never_restarts(self) -> None:
+        class ExitedProcess:
+            returncode = 23
+            pid = 8123
+
+            def poll(self):
+                return self.returncode
+
+        component = app()
+        component.restart = "on-failure"
+        instance = Instance(
+            component=component,
+            generation=9,
+            process=ExitedProcess(),  # type: ignore[arg-type]
+            state="ready",
+            ready=True,
+        )
+        daemon = object.__new__(Msysd)
+        daemon.components = {component.key: component}
+        daemon.instances = {component.key: instance}
+        daemon.foreground_stack = [component.key]
+        daemon.backgrounded_components = set()
+        daemon.stopping = False
+        daemon.role_registry = types.SimpleNamespace(
+            release_provider=lambda _key: None
+        )
+        daemon._begin_unplanned_display_failure = lambda *_args, **_kwargs: None
+        events: list[tuple[str, dict, str]] = []
+
+        async def broadcast(topic, payload, source):
+            events.append((topic, payload, source))
+
+        daemon.broadcast = broadcast
+
+        first = await daemon._finalize_exited_instance(
+            instance, 23, include_watch=True
+        )
+        second = await daemon._finalize_exited_instance(
+            instance, 23, include_watch=True
+        )
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        notifications = [
+            payload for topic, payload, source in events
+            if topic == "msys.notification.post" and source == "msys.core"
+        ]
+        self.assertEqual(len(notifications), 1)
+        self.assertEqual(notifications[0]["schema"], "msys.application-crash.v1")
+        self.assertEqual(notifications[0]["component"], component.key)
+        self.assertEqual(notifications[0]["generation"], 9)
+        self.assertEqual(notifications[0]["returncode"], 23)
+        self.assertEqual(
+            notifications[0]["reason"], "unexpected-process-exit"
+        )
+        self.assertFalse(daemon._should_restart(instance, 23))
+
 
 if __name__ == "__main__":
     unittest.main()

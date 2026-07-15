@@ -199,6 +199,10 @@ class ProfileStartupTests(unittest.TestCase):
             with self.subTest(profile=profile_id):
                 daemon = Msysd(config, Path("/tmp/msys-profile-test"), profile_id)
                 self.assertEqual(daemon.profile["env"]["FONTCONFIG_FILE"], expected)
+                self.assertEqual(
+                    daemon.profile["env"]["MSYS_UI_FONT_FAMILY"],
+                    "Noto Sans CJK SC",
+                )
 
     def test_all_profiles_use_one_native_hal_with_lazy_python_fallback(self) -> None:
         config = Path(__file__).resolve().parents[1] / "examples" / "config"

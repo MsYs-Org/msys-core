@@ -52,6 +52,10 @@ ROLE_RETRY_SAFE_METHODS = {
     "status",
     "capabilities",
 }
+ROLE_NO_START_NOOPS = frozenset({
+    ("input-method", "hide"),
+    ("notification-center", "hide"),
+})
 ROLE_LIVENESS_ERRORS = {
     "CALL_TIMEOUT",
     "CALL_SEND_FAILED",
@@ -78,6 +82,8 @@ DEFAULT_MEMINFO_PATH = Path("/proc/meminfo")
 DEFAULT_PROC_ROOT = Path("/proc")
 CATALOG_TRANSACTION_SCHEMA = "msys.catalog-transaction.v1"
 APPLICATION_NAVIGATION_INTERFACE = "org.msys.application-navigation.v1"
+APPLICATION_CRASH_SCHEMA = "msys.application-crash.v1"
+APPLICATION_CRASH_TOPIC = "msys.notification.post"
 PROCESS_LIST_SCHEMA = "msys.process-list.v1"
 DEFAULT_SYSTEM_PROCESS_LIMIT = 64
 MAX_SYSTEM_PROCESS_LIMIT = 128
@@ -731,6 +737,7 @@ class Msysd:
         self.next_request_id = 1
         self.stopping = False
         self.foreground_stack: list[str] = []
+        self.backgrounded_components: set[str] = set()
         self.start_locks: dict[str, asyncio.Lock] = {}
         self.catalog_lock = asyncio.Lock()
         self.reload_lock = asyncio.Lock()
@@ -770,7 +777,12 @@ class Msysd:
         if now is None:
             now = time.monotonic()
         minimum_age = self.memory_reclaim_policy.min_app_age_ms / 1000.0
-        foreground = self.foreground_stack[0] if self.foreground_stack else None
+        backgrounded = getattr(self, "backgrounded_components", set())
+        foreground = (
+            self.foreground_stack[0]
+            if self.foreground_stack and self.foreground_stack[0] not in backgrounded
+            else None
+        )
         for key in reversed(self.foreground_stack):
             if key == foreground:
                 continue
@@ -2231,7 +2243,7 @@ class Msysd:
             delay = self._record_component_failure(key)
             if delay is not None:
                 self.spawn_backoff_until[key] = time.monotonic() + delay
-                if component.restart in {"always", "on-failure"}:
+                if self._component_should_restart(component, 1):
                     self._schedule_spawn_retry(key, delay)
             raise
         child_sock.close()
@@ -2792,6 +2804,43 @@ class Msysd:
             source="msys.core",
         )
 
+    @staticmethod
+    def _is_ordinary_application(component: Component) -> bool:
+        return (
+            component.package_kind == "application"
+            and component.lifecycle in {"manual", "on-demand"}
+        )
+
+    async def _emit_application_crash_notification(
+        self,
+        instance: Instance,
+        returncode: int,
+        *,
+        reason: str = "unexpected-process-exit",
+    ) -> None:
+        """Publish one structured App failure for notification history."""
+
+        component = instance.component
+        title, _summary = self._localized_component_presentation(
+            component.key, component
+        )
+        payload = {
+            "schema": APPLICATION_CRASH_SCHEMA,
+            "component": component.key,
+            "generation": int(instance.generation),
+            "returncode": int(returncode),
+            "reason": reason,
+            "severity": "error",
+            "title": title,
+            "message": f"{title} exited unexpectedly (code {returncode})",
+            "timestamp_ms": int(time.time() * 1000),
+        }
+        await self.broadcast(
+            APPLICATION_CRASH_TOPIC,
+            payload,
+            source="msys.core",
+        )
+
     def _send_activation_event(self, instance: Instance, activation: dict[str, Any]) -> None:
         if instance.component.readiness_mode != "mipc-ready" or not instance.sock:
             return
@@ -2808,6 +2857,33 @@ class Msysd:
     def _mark_foreground(self, key: str) -> None:
         self.foreground_stack = [item for item in self.foreground_stack if item != key]
         self.foreground_stack.insert(0, key)
+        backgrounded = getattr(self, "backgrounded_components", None)
+        if backgrounded is None:
+            self.backgrounded_components = set()
+        else:
+            backgrounded.discard(key)
+
+    def _forget_foreground(self, key: str) -> None:
+        """Remove one dead task without promoting a Home-hidden predecessor."""
+
+        backgrounded = getattr(self, "backgrounded_components", set())
+        was_backgrounded = key in backgrounded
+        self.foreground_stack = [item for item in self.foreground_stack if item != key]
+        backgrounded.discard(key)
+        if was_backgrounded and self.foreground_stack:
+            backgrounded.add(self.foreground_stack[0])
+        self.backgrounded_components = backgrounded
+
+    def _background_foreground(self, key: str) -> tuple[bool, bool]:
+        """Mark the current task background while preserving Recents history."""
+
+        backgrounded = getattr(self, "backgrounded_components", set())
+        if not self.foreground_stack or self.foreground_stack[0] != key:
+            return False, False
+        already = key in backgrounded
+        backgrounded.add(key)
+        self.backgrounded_components = backgrounded
+        return True, already
 
     def _foreground_entries(
         self,
@@ -2815,6 +2891,8 @@ class Msysd:
         include_resources: bool = False,
     ) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
+        backgrounded = getattr(self, "backgrounded_components", set())
+        visible_index = 0
         for key in self.foreground_stack:
             instance = self.instances.get(key)
             if not instance or not instance.process or instance.process.poll() is not None:
@@ -2823,16 +2901,18 @@ class Msysd:
             window_identity = ""
             if isinstance(identity, dict):
                 window_identity = str(identity.get("x11_wm_class") or identity.get("app_id") or "")
+            is_background = visible_index > 0 or key in backgrounded
             entry: dict[str, Any] = {
                 "component": key,
                 "title": instance.component.raw.get("name") or key,
                 "identity": window_identity,
-                "state": instance.state,
+                "state": "background" if is_background else instance.state,
                 "lifecycle": instance.component.lifecycle,
             }
             if include_resources:
                 entry["resources"] = process_memory_snapshot(instance.process.pid)
             result.append(entry)
+            visible_index += 1
         return result
 
     async def _announce_foreground_closing(self) -> Instance | None:
@@ -2848,6 +2928,7 @@ class Msysd:
             if (
                 instance is None
                 or self.instances.get(key) is not instance
+                or key in getattr(self, "backgrounded_components", set())
                 or not self._is_foreground_app(instance.component)
                 or instance.transition_closing
                 or not instance.process
@@ -3100,7 +3181,7 @@ class Msysd:
         instance.state = "exited" if rc == 0 else "failed"
         instance.ready = False
         instance.ready_event.set()
-        self.foreground_stack = [key for key in self.foreground_stack if key != instance.component.key]
+        self._forget_foreground(instance.component.key)
         print(f"msysd: exited {instance.component.key} rc={rc}", flush=True)
         if self._is_foreground_app(instance.component) and not self.stopping:
             await self._emit_component_transition(
@@ -3109,6 +3190,12 @@ class Msysd:
                 generation=instance.generation,
                 returncode=rc,
             )
+        if (
+            rc != 0
+            and not self.stopping
+            and self._is_ordinary_application(instance.component)
+        ):
+            await self._emit_application_crash_notification(instance, rc)
         if outage is not None:
             await self._suspend_display_consumers(outage)
         return True
@@ -3163,13 +3250,29 @@ class Msysd:
                 pass
             instance.sock = None
 
-    def _should_restart(self, instance: Instance, rc: int) -> bool:
-        policy = instance.component.restart
+    @staticmethod
+    def _is_restartable_system_provider(component: Component) -> bool:
+        return (
+            component.package_kind == "system"
+            and component.lifecycle in {"background", "session"}
+            and any(
+                provide.kind in {"role", "interface", "capability"}
+                for provide in component.provides
+            )
+        )
+
+    def _component_should_restart(self, component: Component, rc: int) -> bool:
+        if not self._is_restartable_system_provider(component):
+            return False
+        policy = component.restart
         if policy == "always":
             return True
         if policy == "on-failure" and rc != 0:
             return True
         return False
+
+    def _should_restart(self, instance: Instance, rc: int) -> bool:
+        return self._component_should_restart(instance.component, rc)
 
     def _record_restart_failure(self, instance: Instance) -> float | None:
         delay = self._record_component_failure(instance.component.key)
@@ -3567,14 +3670,50 @@ class Msysd:
             }
         return await self._forward_call(provider, msg, source=source)
 
+    def _role_provider_is_running(self, role: str) -> bool:
+        """Inspect live role candidates without activating an on-demand one."""
+
+        try:
+            candidates = [
+                self.role_registry.active_provider(role),
+                self.role_registry.preferred_provider(role),
+                *self.role_registry.candidate_ids(role),
+            ]
+        except KeyError:
+            return False
+        for key in dict.fromkeys(item for item in candidates if item):
+            instance = self.instances.get(key)
+            if instance is None or getattr(instance, "finalized", False):
+                continue
+            process = instance.process
+            if process is not None and process.poll() is None:
+                return True
+        return False
+
     async def _dispatch_role_call(self, msg: dict[str, Any], source: str) -> dict[str, Any]:
         request_id = int(msg.get("id", 0))
         role = str(msg.get("target", "")).split(":", 1)[1]
         method = str(msg.get("method", ""))
         x11_control_fallback = role in {"window-policy", "window-manager"}
-        if role == "window-manager" and method in {"close_active", "back"}:
+        no_start_noop = (role, method) in ROLE_NO_START_NOOPS
+        if no_start_noop and not self._role_provider_is_running(role):
+            return {
+                "type": "return",
+                "id": request_id,
+                "payload": {
+                    "ok": True,
+                    "role": role,
+                    "visible": False,
+                    "already_hidden": True,
+                },
+            }
+        if role == "window-manager" and method == "close_active":
             await self._announce_foreground_closing()
-        retry_safe = bool(msg.get("idempotent")) or method in ROLE_RETRY_SAFE_METHODS
+        retry_safe = (
+            bool(msg.get("idempotent"))
+            or method in ROLE_RETRY_SAFE_METHODS
+            or no_start_noop
+        )
         attempted: set[str] = set()
         last_error: dict[str, Any] | None = None
         while True:
@@ -5336,7 +5475,7 @@ class Msysd:
         if method == "navigation_back":
             request_id = msg.get("id", 0)
             entries = self._foreground_entries()
-            if not entries:
+            if not entries or entries[0].get("state") == "background":
                 return {
                     "type": "return",
                     "id": request_id,
@@ -5411,6 +5550,55 @@ class Msysd:
                     "fallback": not handled,
                     "component": component_id,
                     "result": result if isinstance(result, dict) else {},
+                },
+            }
+        if method == "background_component":
+            request_id = msg.get("id", 0)
+            request = msg.get("payload", {})
+            if not isinstance(request, dict):
+                return {
+                    "type": "error",
+                    "id": request_id,
+                    "code": "BAD_PAYLOAD",
+                    "message": "background payload must be an object",
+                }
+            component_id = request.get("component")
+            if not isinstance(component_id, str) or not component_id:
+                return {
+                    "type": "error",
+                    "id": request_id,
+                    "code": "BAD_COMPONENT",
+                    "message": "background_component requires a component",
+                }
+            instance = self.instances.get(component_id)
+            if (
+                instance is None
+                or not instance.process
+                or instance.process.poll() is not None
+                or not self._is_foreground_app(instance.component)
+            ):
+                return {
+                    "type": "error",
+                    "id": request_id,
+                    "code": "COMPONENT_UNAVAILABLE",
+                    "message": component_id,
+                }
+            accepted, already = self._background_foreground(component_id)
+            if not accepted:
+                return {
+                    "type": "error",
+                    "id": request_id,
+                    "code": "NOT_FOREGROUND",
+                    "message": component_id,
+                }
+            return {
+                "type": "return",
+                "id": request_id,
+                "payload": {
+                    "ok": True,
+                    "component": component_id,
+                    "state": "background",
+                    "already_background": already,
                 },
             }
         if method == "discover":
@@ -5886,7 +6074,45 @@ class Msysd:
                 managed_titles = {str(item.get("title", "")) for item in managed}
                 external = [window for window in raw_windows if window["title"] not in managed_titles]
                 return {"type": "return", "id": request_id, "payload": {"windows": [*managed, *external]}}
-            if method in {"close_active", "back"}:
+            if method == "back":
+                navigation = await self._core_call({
+                    "type": "call",
+                    "id": request_id,
+                    "method": "navigation_back",
+                    "payload": {},
+                    **(
+                        {"deadline_ms": msg["deadline_ms"]}
+                        if "deadline_ms" in msg
+                        else {}
+                    ),
+                }, source="msys.core")
+                navigation_payload = navigation.get("payload", {})
+                if (
+                    navigation.get("type") == "return"
+                    and isinstance(navigation_payload, dict)
+                    and navigation_payload.get("handled") is True
+                ):
+                    return {
+                        "type": "return",
+                        "id": request_id,
+                        "payload": {
+                            "ok": True,
+                            "destination": "application",
+                            "application_navigation": navigation_payload,
+                        },
+                    }
+                # Without the selected policy there is no safe in-process X11
+                # minimize primitive here. Never regress Back into stop/xkill.
+                return {
+                    "type": "return",
+                    "id": request_id,
+                    "payload": {
+                        "ok": False,
+                        "reason": "window-policy-required-for-safe-back",
+                        "application_navigation": navigation_payload,
+                    },
+                }
+            if method == "close_active":
                 if managed:
                     key = managed[0]["component"]
                     await self.stop_component(key)
@@ -5987,7 +6213,7 @@ class Msysd:
         self._close_instance_channel(instance, "PROVIDER_STOPPED")
         instance.ready = False
         instance.ready_event.set()
-        self.foreground_stack = [component for component in self.foreground_stack if component != key]
+        self._forget_foreground(key)
         await self._terminate_instance_process(instance)
         if animate:
             await self._emit_component_transition(

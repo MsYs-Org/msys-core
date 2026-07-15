@@ -101,7 +101,7 @@ class RoleDispatchContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(daemon.actions, ["closing", "forward"])
         self.assertEqual(daemon.fallback_calls, [])
 
-    async def test_back_announces_closing_before_native_window_policy(self) -> None:
+    async def test_back_does_not_announce_a_close_before_backgrounding(self) -> None:
         daemon = FakeRoleDaemon([
             {"type": "return", "id": 1, "payload": {"ok": True}},
         ])
@@ -113,7 +113,7 @@ class RoleDispatchContractTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(response["type"], "return")
-        self.assertEqual(daemon.actions, ["closing", "forward"])
+        self.assertEqual(daemon.actions, ["forward"])
         self.assertEqual(daemon.fallback_calls, [])
 
     async def test_missing_policy_uses_marked_core_control_fallback(self) -> None:
@@ -245,6 +245,99 @@ class ChooserCancellationDispatchTests(unittest.IsolatedAsyncioTestCase):
         finally:
             daemon.role_locks["chooser"].release()
         self.assertEqual(response["payload"]["source"], "window-policy")
+
+
+class NoStartHideDispatchTests(unittest.IsolatedAsyncioTestCase):
+    class Registry:
+        @staticmethod
+        def active_provider(_role: str):
+            return None
+
+        @staticmethod
+        def preferred_provider(role: str):
+            return f"org.example:{role}"
+
+        @staticmethod
+        def candidate_ids(role: str):
+            return (f"org.example:{role}",)
+
+    class Daemon:
+        def __init__(self) -> None:
+            self.role_registry = NoStartHideDispatchTests.Registry()
+            self.instances = {}
+            self.provider_calls = 0
+            self.forward_calls = 0
+
+        def _role_provider_is_running(self, role: str) -> bool:
+            return Msysd._role_provider_is_running(self, role)
+
+        async def _provider_for_role(self, role: str, *, exclude=None):
+            self.provider_calls += 1
+            return types.SimpleNamespace(
+                component=types.SimpleNamespace(key=f"org.example:{role}")
+            )
+
+        async def _forward_call(self, provider, message, source):
+            self.forward_calls += 1
+            return {
+                "type": "return",
+                "id": message["id"],
+                "payload": {"ok": True, "method": message["method"]},
+            }
+
+    async def test_hidden_lazy_roles_do_not_cold_start(self) -> None:
+        for role in ("input-method", "notification-center"):
+            with self.subTest(role=role):
+                daemon = self.Daemon()
+                response = await Msysd._dispatch_role_call(daemon, {
+                    "type": "call",
+                    "id": 31,
+                    "target": f"role:{role}",
+                    "method": "hide",
+                    "payload": {},
+                }, source="window-policy")
+                self.assertEqual(response["payload"], {
+                    "ok": True,
+                    "role": role,
+                    "visible": False,
+                    "already_hidden": True,
+                })
+                self.assertEqual(daemon.provider_calls, 0)
+                self.assertEqual(daemon.forward_calls, 0)
+
+    async def test_show_and_toggle_keep_normal_provider_activation(self) -> None:
+        for method in ("show", "toggle"):
+            with self.subTest(method=method):
+                daemon = self.Daemon()
+                response = await Msysd._dispatch_role_call(daemon, {
+                    "type": "call",
+                    "id": 32,
+                    "target": "role:input-method",
+                    "method": method,
+                    "payload": {},
+                }, source="application")
+                self.assertEqual(response["payload"]["method"], method)
+                self.assertEqual(daemon.provider_calls, 1)
+                self.assertEqual(daemon.forward_calls, 1)
+
+    async def test_hide_is_forwarded_when_provider_is_already_running(self) -> None:
+        daemon = self.Daemon()
+        daemon.instances["org.example:input-method"] = types.SimpleNamespace(
+            finalized=False,
+            process=types.SimpleNamespace(poll=lambda: None),
+        )
+
+        response = await Msysd._dispatch_role_call(daemon, {
+            "type": "call",
+            "id": 33,
+            "target": "role:input-method",
+            "method": "hide",
+            "payload": {},
+        }, source="window-policy")
+
+        self.assertEqual(response["payload"]["method"], "hide")
+        self.assertEqual(daemon.provider_calls, 1)
+        self.assertEqual(daemon.forward_calls, 1)
 
 
 class TaskSwitcherReentrantDispatchTests(unittest.IsolatedAsyncioTestCase):

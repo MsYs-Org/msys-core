@@ -69,6 +69,7 @@
                 ],
     "env":  {
                 "FONTCONFIG_FILE":  "/opt/msys/current/msys-x11-session/files/share/fontconfig/msys-fonts.conf",
+                "MSYS_UI_FONT_FAMILY":  "Noto Sans CJK SC",
                 "MSYS_NAV_MODE":  "pill",
                 "MSYS_NATIVE_NAV_MODE":  "pill",
                 "MSYS_LAYOUT_PROFILE":  "mobile",

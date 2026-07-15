@@ -4,7 +4,7 @@ import asyncio
 import unittest
 from typing import Any
 
-from msys_core.manifest import Component
+from msys_core.manifest import Component, Provide
 from msys_core.msysd import Instance, Msysd
 
 
@@ -23,7 +23,9 @@ def component(*, restart: str) -> Component:
         id="service",
         exec=["unused"],
         lifecycle="background",
+        package_kind="system",
         restart=restart,
+        provides=[Provide("role", "test-provider", exclusive=True)],
         readiness_mode="mipc-ready",
         readiness_timeout_ms=250,
     )
@@ -40,6 +42,44 @@ def daemon_state(item: Component) -> Msysd:
 
 
 class ReadinessSupervisionTests(unittest.TestCase):
+    def test_only_explicit_eager_system_providers_can_restart(self) -> None:
+        provider_component = component(restart="on-failure")
+        self.assertTrue(Msysd._component_should_restart(
+            object.__new__(Msysd), provider_component, 1
+        ))
+        self.assertFalse(Msysd._component_should_restart(
+            object.__new__(Msysd), provider_component, 0
+        ))
+
+        for lifecycle in ("manual", "on-demand"):
+            for policy in ("always", "on-failure"):
+                with self.subTest(lifecycle=lifecycle, policy=policy):
+                    ordinary = Component(
+                        package_id="org.example.app",
+                        package_version="1.0.0",
+                        package_kind="application",
+                        id="main",
+                        exec=["app"],
+                        lifecycle=lifecycle,
+                        restart=policy,
+                        provides=[Provide("interface", "org.example.data")],
+                    )
+                    self.assertFalse(Msysd._component_should_restart(
+                        object.__new__(Msysd), ordinary, 1
+                    ))
+
+        system_on_demand = component(restart="always")
+        system_on_demand.lifecycle = "on-demand"
+        self.assertFalse(Msysd._component_should_restart(
+            object.__new__(Msysd), system_on_demand, 1
+        ))
+
+        system_without_service = component(restart="on-failure")
+        system_without_service.provides = []
+        self.assertFalse(Msysd._component_should_restart(
+            object.__new__(Msysd), system_without_service, 1
+        ))
+
     def test_ensure_ready_follows_automatic_restart_generation(self) -> None:
         asyncio.run(self._ensure_ready_follows_automatic_restart_generation())
 

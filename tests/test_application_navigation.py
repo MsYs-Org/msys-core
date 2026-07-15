@@ -37,11 +37,20 @@ class FakeDaemon:
                 component=selected,
                 sock=object(),
                 ready=True,
+                process=types.SimpleNamespace(poll=lambda: None),
+                state="ready",
             )
         }
+        self.backgrounded_components: set[str] = set()
 
     def _foreground_entries(self) -> list[dict[str, str]]:
-        return [{"component": self.foreground_stack[0]}] if self.foreground_stack else []
+        return Msysd._foreground_entries(self)  # type: ignore[return-value]
+
+    def _is_foreground_app(self, selected: Component) -> bool:
+        return Msysd._is_foreground_app(self, selected)
+
+    def _background_foreground(self, key: str) -> tuple[bool, bool]:
+        return Msysd._background_foreground(self, key)
 
     async def _forward_call(self, instance, message, source: str) -> dict:
         self.forwarded.append((instance, message, source))
@@ -95,6 +104,38 @@ class ApplicationNavigationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(response["payload"]["handled"])
         self.assertFalse(response["payload"]["fallback"])
         self.assertEqual(response["payload"]["reason"], "CALL_TIMEOUT")
+
+    async def test_background_keeps_process_and_recents_but_removes_active_app(self) -> None:
+        daemon = FakeDaemon(navigation=False)
+        component_id = daemon.foreground_stack[0]
+        process = daemon.instances[component_id].process
+
+        response = await Msysd._core_call(daemon, {
+            "type": "call",
+            "id": 18,
+            "method": "background_component",
+            "payload": {"component": component_id},
+        }, source="org.msys.x11.session:window-policy")
+
+        self.assertEqual(response["payload"]["state"], "background")
+        self.assertIsNone(process.poll())
+        self.assertEqual(daemon.foreground_stack, [component_id])
+        self.assertEqual(daemon._foreground_entries()[0]["state"], "background")
+        navigation = await self.call(daemon)
+        self.assertEqual(
+            navigation["payload"]["reason"], "no-foreground-application"
+        )
+
+    async def test_only_current_live_application_can_be_backgrounded(self) -> None:
+        daemon = FakeDaemon(navigation=False)
+        response = await Msysd._core_call(daemon, {
+            "type": "call",
+            "id": 19,
+            "method": "background_component",
+            "payload": {"component": "org.example.missing:main"},
+        })
+        self.assertEqual(response["type"], "error")
+        self.assertEqual(response["code"], "COMPONENT_UNAVAILABLE")
 
 
 if __name__ == "__main__":
