@@ -24,9 +24,9 @@ NATIVE_ROLES = {
     "navigation-bar": "org.msys.shell.pyside:navigation",
     "task-switcher": PYSIDE_TASK_SWITCHER,
     "notification-presenter": "org.msys.shell.pyside:notifications",
+    "notification-center": "org.msys.shell.pyside:notification-center",
 }
 PYSIDE_UNIMPLEMENTED_ON_DEMAND = {
-    "notification-center": "org.msys.shell.pyside:notification-center",
     "chooser": "org.msys.shell.pyside:intent-chooser",
     "transition-presenter": "org.msys.shell.pyside:transitions",
 }

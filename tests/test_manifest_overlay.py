@@ -71,6 +71,7 @@ class PackageOverlayTests(unittest.TestCase):
                 "navigation-bar",
                 "task-switcher",
                 "notification-presenter",
+                "notification-center",
             },
         )
 

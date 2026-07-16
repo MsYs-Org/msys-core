@@ -3,7 +3,7 @@
   "package": {
     "id": "org.msys.shell.native",
     "name": "MSYS Native Shell",
-    "version": "0.3.0",
+    "version": "0.3.21",
     "kind": "system",
     "vendor": "MSYS",
     "summary": "Lean adaptive Xlib shell with app icons and task previews",
@@ -65,14 +65,27 @@
             "x11_wm_instance": "msys-shell-native"
           },
           "edge": "bottom"
+        },
+        "notification-center": {
+          "system": "x11",
+          "display": "inherit",
+          "mode": "overlay",
+          "title": "MSYS Notification Center",
+          "identity": {
+            "app_id": "org.msys.shell.native.notification-center",
+            "x11_wm_class": "org.msys.shell.native.notification-center",
+            "x11_wm_instance": "msys-shell-native"
+          }
         }
       },
       "permissions": [
         "display:x11",
         "mipc.call:msys.core",
         "mipc.call:role:window-manager",
-        "mipc.call:role:notification-center",
         "mipc.event:subscribe:msys.role.notification-presenter",
+        "mipc.event:subscribe:msys.notification.post",
+        "mipc.event:subscribe:msys.session.preferences.changed",
+        "mipc.event:subscribe:msys.timezone.changed",
         "mipc.event:subscribe:msys.role.navigation-bar",
         "mipc.event:subscribe:msys.role.system-chrome",
         "mipc.event:subscribe:msys.install.package_changed",
@@ -111,6 +124,11 @@
         },
         {
           "role": "notification-presenter",
+          "exclusive": true,
+          "priority": 90
+        },
+        {
+          "role": "notification-center",
           "exclusive": true,
           "priority": 90
         }

@@ -18,6 +18,7 @@
                                                  "org.msys.shell.pyside:notifications"
                                              ],
                   "notification-center":  [
+                                              "org.msys.shell.native:desktop-shell",
                                               "org.msys.shell.pyside:notification-center"
                                           ],
                   "task-switcher":  [
