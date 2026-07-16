@@ -1,6 +1,13 @@
 # msys-core
 
-Current source version: `0.1.23`.
+Current source version: `0.1.24`.
+
+Version 0.1.24 extends the bounded process inventory with the strict
+`scope: "all-msys"` selection. It includes every live supervised MSYS
+generation, including graphical applications, overlays, and on-demand input
+methods, while the omitted/default `scope: "headless-msys"` retains the
+original response filter. Optional non-MSYS procfs entries remain controlled
+only by `include_system`.
 
 Version 0.1.23 adds the optional, bounded `logical_target` field to provider
 call frames. The existing provider-owned `target` remains unchanged, while a
@@ -231,6 +238,12 @@ component presentation as `list_components`:
   "generation": 1
 }
 ```
+
+The equivalent explicit default is `{"scope":"headless-msys"}`. Use
+`{"scope":"all-msys"}` to include every live supervised MSYS component,
+including graphical applications, overlays, and on-demand input methods.
+Responses echo the selected `scope` and matching `filter`; stopped generations
+are omitted in both modes.
 
 `include_system` opts into a direct procfs snapshot of non-MSYS processes:
 

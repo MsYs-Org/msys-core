@@ -2511,10 +2511,11 @@ class Msysd:
     def _process_list_snapshot(
         self,
         *,
+        scope: str,
         include_system: bool,
         system_limit: int,
     ) -> dict[str, Any]:
-        """Build one bounded headless-component and optional procfs snapshot."""
+        """Build one bounded managed-component and optional procfs snapshot."""
 
         live: list[tuple[str, Instance, int]] = []
         for key, instance in sorted(self.instances.items()):
@@ -2554,7 +2555,10 @@ class Msysd:
         managed_eligible = 1
         for key, instance, pid in live:
             component = instance.component
-            if self._component_has_gui_window(component):
+            if (
+                scope == "headless-msys"
+                and self._component_has_gui_window(component)
+            ):
                 continue
             managed_eligible += 1
             if len(managed) >= MAX_MANAGED_PROCESS_RESULTS:
@@ -2600,7 +2604,8 @@ class Msysd:
             )
         return {
             "schema": PROCESS_LIST_SCHEMA,
-            "filter": "headless-msys",
+            "scope": scope,
+            "filter": scope,
             "include_system": include_system,
             "system_limit": system_limit,
             "managed_count": len(managed),
@@ -6061,7 +6066,8 @@ class Msysd:
                     "code": "BAD_PAYLOAD",
                     "message": "process list payload must be an object",
                 }
-            unknown = set(request) - {"include_system", "limit"}
+            unknown = set(request) - {"scope", "include_system", "limit"}
+            scope = request.get("scope", "headless-msys")
             include_system = request.get("include_system", False)
             limit = request.get("limit", DEFAULT_SYSTEM_PROCESS_LIMIT)
             if unknown:
@@ -6070,6 +6076,18 @@ class Msysd:
                     "id": msg.get("id", 0),
                     "code": "BAD_PAYLOAD",
                     "message": "unknown process list field",
+                }
+            if not isinstance(scope, str) or scope not in {
+                "headless-msys",
+                "all-msys",
+            }:
+                return {
+                    "type": "error",
+                    "id": msg.get("id", 0),
+                    "code": "BAD_PAYLOAD",
+                    "message": (
+                        "process list scope must be 'headless-msys' or 'all-msys'"
+                    ),
                 }
             if not isinstance(include_system, bool):
                 return {
@@ -6096,6 +6114,7 @@ class Msysd:
                 "type": "return",
                 "id": msg.get("id", 0),
                 "payload": self._process_list_snapshot(
+                    scope=scope,
                     include_system=include_system,
                     system_limit=limit,
                 ),

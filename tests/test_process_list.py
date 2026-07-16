@@ -163,6 +163,7 @@ class ProcessListTests(unittest.TestCase):
         self.assertEqual(response["type"], "return")
         payload = response["payload"]
         self.assertEqual(payload["schema"], "msys.process-list.v1")
+        self.assertEqual(payload["scope"], "headless-msys")
         self.assertEqual(payload["filter"], "headless-msys")
         self.assertFalse(payload["include_system"])
         self.assertEqual(payload["managed_count"], 2)
@@ -191,6 +192,96 @@ class ProcessListTests(unittest.TestCase):
         self.assertTrue(process["msys_owned"])
         self.assertEqual(process["name"], "硬件服务")
         self.assertEqual(process["rss_kib"], 2048)
+
+    def test_explicit_headless_scope_preserves_default_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            proc_process(
+                root, 100, name="hal", ppid=50, group=100, session=100,
+            )
+            proc_process(
+                root, 200, name="settings", ppid=50, group=200, session=200,
+            )
+            daemon = self.daemon(root)
+            self.add_instance(daemon, component("hal"), 100)
+            self.add_instance(
+                daemon,
+                component(
+                    "settings",
+                    lifecycle="manual",
+                    windowing={"system": "x11", "mode": "window"},
+                ),
+                200,
+            )
+
+            default = self.call(daemon, {})["payload"]
+            explicit = self.call(daemon, {"scope": "headless-msys"})["payload"]
+
+        self.assertEqual(default, explicit)
+        self.assertEqual(explicit["scope"], "headless-msys")
+        self.assertEqual(explicit["filter"], "headless-msys")
+
+    def test_all_msys_lists_every_live_managed_component(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            daemon = self.daemon(root)
+            declarations = (
+                component("hal", lifecycle="background"),
+                component(
+                    "application",
+                    lifecycle="manual",
+                    windowing={"system": "x11", "mode": "window"},
+                ),
+                component(
+                    "overlay",
+                    lifecycle="background",
+                    windowing={"system": "x11", "mode": "overlay"},
+                ),
+                component(
+                    "input-method",
+                    lifecycle="on-demand",
+                    windowing={"system": "x11", "mode": "overlay"},
+                ),
+                component("stopped", lifecycle="on-demand"),
+            )
+            for pid, declared in enumerate(declarations, start=100):
+                proc_process(
+                    root,
+                    pid,
+                    name=declared.id,
+                    ppid=50,
+                    group=pid,
+                    session=pid,
+                )
+                self.add_instance(
+                    daemon,
+                    declared,
+                    pid,
+                    running=declared.id != "stopped",
+                )
+
+            response = self.call(daemon, {"scope": "all-msys"})
+
+        self.assertEqual(response["type"], "return")
+        payload = response["payload"]
+        self.assertEqual(payload["scope"], "all-msys")
+        self.assertEqual(payload["filter"], "all-msys")
+        self.assertEqual(payload["managed_count"], 5)
+        components = {
+            item["component"] for item in payload["processes"]
+            if item["msys_owned"]
+        }
+        self.assertEqual(
+            components,
+            {
+                "msys.core",
+                "org.example:hal",
+                "org.example:application",
+                "org.example:overlay",
+                "org.example:input-method",
+            },
+        )
+        self.assertNotIn("org.example:stopped", components)
 
     def test_include_system_excludes_every_msys_process_group_and_is_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -237,12 +328,16 @@ class ProcessListTests(unittest.TestCase):
                 "msys_core.msysd.subprocess.run",
                 side_effect=AssertionError("list_processes must not execute ps"),
             ):
-                response = self.call(
-                    daemon, {"include_system": True, "limit": 2}
-                )
+                response = self.call(daemon, {
+                    "scope": "all-msys",
+                    "include_system": True,
+                    "limit": 2,
+                })
 
         payload = response["payload"]
-        self.assertEqual(payload["managed_count"], 2)
+        self.assertEqual(payload["scope"], "all-msys")
+        self.assertEqual(payload["filter"], "all-msys")
+        self.assertEqual(payload["managed_count"], 3)
         self.assertEqual(payload["system_count"], 2)
         self.assertTrue(payload["system_truncated"])
         external = [
@@ -271,6 +366,10 @@ class ProcessListTests(unittest.TestCase):
                 None,
                 [],
                 {"include_system": 1},
+                {"scope": None},
+                {"scope": 1},
+                {"scope": ""},
+                {"scope": "system"},
                 {"limit": True},
                 {"limit": 0},
                 {"limit": 129},
