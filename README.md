@@ -1,6 +1,14 @@
 # msys-core
 
-Current source version: `0.1.25`.
+Current source version: `0.1.26`.
+
+Version 0.1.26 keeps window policy in its replaceable provider instead of
+embedding a second `xwininfo`/`xkill` implementation in Core. X11 display
+providers now publish readiness through their declared ready file (or the X
+socket when no file is declared), avoiding repeated `xdpyinfo` processes while
+the server starts. Core also drops an unused role-map copy, initializes display
+state once instead of checking for test-only missing fields on every operation,
+and caches immutable Linux isolation capabilities across component launches.
 
 Version 0.1.25 makes the default `mobile-spi` profile explicitly name only the
 providers the deployed system actually uses. Native Shell is its sole listed
@@ -214,7 +222,7 @@ consumes that value while the isolated interpreter starts; `msysd.main()` then
 removes the variable before any component environment is constructed, so this
 is not an allocator policy imposed on applications or replaceable providers.
 On the 2026-07-13 OpenStick AArch64 audit, loading the complete formal catalog
-and completing one real `xdpyinfo` readiness probe produced a median
+and reaching X11 provider readiness produced a median
 `Pss_Anon` of 18,284 KiB without the fixed threshold and 15,668 KiB after the
 same threshold was consumed and removed, a 2,616 KiB reduction. Samples were
 fresh, unswapped processes using the same runtime and `MALLOC_ARENA_MAX=2`.

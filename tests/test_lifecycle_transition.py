@@ -69,6 +69,9 @@ class LifecycleTransitionTests(unittest.IsolatedAsyncioTestCase):
             def _lease_preferred_roles(self, selected):
                 self.leased = selected
 
+            def _component_became_ready(self, selected):
+                self._lease_preferred_roles(selected)
+
             def _is_foreground_app(self, selected):
                 return Msysd._is_foreground_app(self, selected)
 

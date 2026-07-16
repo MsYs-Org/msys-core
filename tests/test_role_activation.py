@@ -267,29 +267,5 @@ class RoleActivationTests(unittest.IsolatedAsyncioTestCase):
             "NO_PROVIDER",
         )
 
-    async def test_core_x11_home_fallback_delegates_to_generic_role_api(self) -> None:
-        daemon = object.__new__(Msysd)
-        daemon._core_call = AsyncMock(return_value={
-            "type": "return",
-            "id": 44,
-            "payload": {"ok": True, "provider": "org.vendor.home:main"},
-        })
-        message = {
-            "type": "call",
-            "id": 44,
-            "method": "home",
-            "deadline_ms": 123456,
-        }
-
-        response = await Msysd._x11_window_policy_call(daemon, message)
-
-        self.assertEqual(response["payload"]["provider"], "org.vendor.home:main")
-        forwarded = daemon._core_call.await_args.args[0]
-        self.assertEqual(forwarded["method"], "activate_role")
-        self.assertEqual(forwarded["payload"], {"role": "launcher"})
-        self.assertEqual(forwarded["deadline_ms"], 123456)
-        self.assertEqual(daemon._core_call.await_args.kwargs["source"], "msys.core")
-
-
 if __name__ == "__main__":
     unittest.main()

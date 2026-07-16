@@ -20,7 +20,12 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .isolation import describe_isolation, detect_capabilities, prepare_isolation_launch
+from .isolation import (
+    IsolationCapabilities,
+    describe_isolation,
+    detect_capabilities,
+    prepare_isolation_launch,
+)
 from .manifest import (
     Component,
     load_installed_manifests,
@@ -732,11 +737,6 @@ class Msysd:
         self.service_catalog = ServiceCatalog(self.components)
         self.role_preference_overrides: dict[str, str] = {}
         self._load_role_preferences()
-        self.role_map: dict[str, list[str]] = {
-            role: list(self.role_registry.candidate_ids(role))
-            for role in self.role_registry.list_roles()
-        }
-        self.pending_calls: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self.failure_history: dict[str, list[float]] = {}
         self.spawn_backoff_until: dict[str, float] = {}
         self.spawn_retry_tasks: dict[str, asyncio.Task[Any]] = {}
@@ -755,6 +755,7 @@ class Msysd:
         self.display_migrations: dict[int, dict[str, Any]] = {}
         self.display_migration_active: int | None = None
         self.display_migration_tasks: dict[int, asyncio.Task[Any]] = {}
+        self.display_recovery_lock = asyncio.Lock()
         # Transport reconnects remain inside the long-lived display provider.
         # If that provider itself exits, its X stack is no longer adoptable;
         # the outage record fences client restart budgets and retains only the
@@ -771,7 +772,8 @@ class Msysd:
         self.memory_reclaim_policy = MemoryReclaimPolicy.from_profile(self.profile)
         self.meminfo_path = DEFAULT_MEMINFO_PATH
         self.proc_root = DEFAULT_PROC_ROOT
-        self._presentation_catalogs = PresentationCatalogCache()
+        self._presentation_catalogs: PresentationCatalogCache | None = None
+        self._isolation_capabilities: IsolationCapabilities | None = None
 
     def _track_task(self, coro: Any) -> asyncio.Task[Any]:
         task = asyncio.create_task(coro)
@@ -1267,6 +1269,13 @@ class Msysd:
         configured = settings.get("seccomp_helper") if isinstance(settings, dict) else None
         value = configured or os.environ.get("MSYS_SECCOMP_HELPER")
         return str(value) if value else None
+
+    def _runtime_isolation_capabilities(self) -> IsolationCapabilities:
+        capabilities = self._isolation_capabilities
+        if capabilities is None:
+            capabilities = detect_capabilities(self._seccomp_helper())
+            self._isolation_capabilities = capabilities
+        return capabilities
 
     @staticmethod
     def _validate_dependency_graph(components: dict[str, Component]) -> None:
@@ -2032,10 +2041,6 @@ class Msysd:
             self.role_preference_overrides = valid_overrides
             self.role_registry = registry
             self.service_catalog = ServiceCatalog(replacement)
-            self.role_map = {
-                role: list(registry.candidate_ids(role))
-                for role in registry.list_roles()
-            }
             self.catalog_epoch += 1
             stop_targets = {
                 key: self.instances[key]
@@ -2293,6 +2298,7 @@ class Msysd:
                 component.isolation,
                 argv,
                 seccomp_helper=self._seccomp_helper(),
+                capabilities=self._runtime_isolation_capabilities(),
             )
             env.update(isolation_plan.environment())
             isolation_summary = isolation_plan.summary()
@@ -2707,8 +2713,8 @@ class Msysd:
         if not isinstance(declaration, dict) or component.manifest_path is None:
             return fallback_name, fallback_summary
 
-        catalogs = getattr(self, "_presentation_catalogs", None)
-        if not isinstance(catalogs, PresentationCatalogCache):
+        catalogs = self._presentation_catalogs
+        if catalogs is None:
             catalogs = PresentationCatalogCache()
             self._presentation_catalogs = catalogs
         catalog = catalogs.get(component.manifest_path, declaration.get("catalog"))
@@ -3060,14 +3066,7 @@ class Msysd:
                     break
 
             if instance.ready and self.instances.get(key) is instance:
-                ready_hook = getattr(self, "_component_became_ready", None)
-                if ready_hook is not None:
-                    ready_hook(instance)
-                else:
-                    # A few focused adapters exercise ``ensure_ready`` with a
-                    # deliberately minimal daemon object.  Preserve the old
-                    # hook contract for those embedders.
-                    self._lease_preferred_roles(instance)
+                self._component_became_ready(instance)
                 if (
                     self._is_foreground_app(instance.component)
                     and not instance.transition_launched
@@ -3156,7 +3155,6 @@ class Msysd:
                 ready_file = component.env.get("MSYS_X11_READY_FILE")
                 display_number = display.removeprefix(":").split(".", 1)[0]
                 display_socket_ready = Path(f"/tmp/.X11-unix/X{display_number}").exists()
-                x_ready = False
                 if ready_file:
                     ready_path = Path(ready_file)
                     try:
@@ -3164,24 +3162,8 @@ class Msysd:
                         x_ready = ready_stat.st_mtime >= instance.started_wallclock
                     except OSError:
                         x_ready = False
-                if display_socket_ready:
-                    env = os.environ.copy()
-                    env.update({str(k): str(v) for k, v in self.profile.get("env", {}).items()})
-                    env.update(component.env)
-                    env["DISPLAY"] = display
-                    try:
-                        result = await asyncio.to_thread(
-                            subprocess.run,
-                            ["xdpyinfo"],
-                            env=env,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            timeout=1,
-                            check=False,
-                        )
-                        x_ready = x_ready and result.returncode == 0 if ready_file else result.returncode == 0
-                    except (FileNotFoundError, subprocess.TimeoutExpired):
-                        x_ready = x_ready if ready_file else display_socket_ready
+                else:
+                    x_ready = display_socket_ready
                 if x_ready:
                     instance.ready = True
                     instance.state = "ready"
@@ -3189,10 +3171,8 @@ class Msysd:
                     self._component_became_ready(instance)
                     print(f"msysd: ready {component.key} display={display}", flush=True)
                     return
-            # This fallback probe only exists while an X server generation is
-            # starting.  A 50 ms interval was visible when switching display
-            # providers on the small target; 20 ms keeps the stat/xdpyinfo
-            # work bounded while removing most of that fixed hand-off delay.
+            # Providers should publish a ready file after accepting clients;
+            # the X socket remains the compatibility signal when none is declared.
             await asyncio.sleep(X11_READINESS_POLL_SECONDS)
         if instance.ready or self.instances.get(component.key) is not instance:
             return
@@ -3785,7 +3765,6 @@ class Msysd:
         request_id = int(msg.get("id", 0))
         role = str(msg.get("target", "")).split(":", 1)[1]
         method = str(msg.get("method", ""))
-        x11_control_fallback = role in {"window-policy", "window-manager"}
         no_start_noop = (role, method) in ROLE_NO_START_NOOPS
         if no_start_noop and not self._role_provider_is_running(role):
             return {
@@ -3825,8 +3804,6 @@ class Msysd:
                 flush=True,
             )
             if code not in ROLE_LIVENESS_ERRORS:
-                if x11_control_fallback:
-                    break
                 response["id"] = request_id
                 return response
             attempted.add(provider.component.key)
@@ -3838,19 +3815,6 @@ class Msysd:
                     "code": "OUTCOME_UNKNOWN",
                     "message": f"{role}.{method} may have been delivered to {provider.component.key}",
                 }
-        if x11_control_fallback:
-            direct = await self._x11_window_policy_call(msg)
-            if direct is not None:
-                print(
-                    "msysd: using core X11 control fallback "
-                    f"role={role} method={method} display={self._session_display()}",
-                    flush=True,
-                )
-                direct["fallback"] = True
-                payload = direct.get("payload")
-                if isinstance(payload, dict):
-                    payload["fallback"] = True
-                return direct
         if last_error is not None:
             last_error["id"] = request_id
             return last_error
@@ -4187,46 +4151,6 @@ class Msysd:
             return summary
         raise RuntimeError(f"role catalog changed repeatedly while switching {role}")
 
-    def _ensure_display_migration_runtime(self) -> None:
-        """Initialize migration bookkeeping for lightweight test daemons too."""
-
-        if not hasattr(self, "next_display_migration_id"):
-            self.next_display_migration_id = 1
-        if not hasattr(self, "display_migrations"):
-            self.display_migrations = {}
-        if not hasattr(self, "display_migration_active"):
-            self.display_migration_active = None
-        if not hasattr(self, "display_migration_tasks"):
-            self.display_migration_tasks = {}
-
-    def _ensure_display_recovery_runtime(self) -> None:
-        """Initialize display failure-domain state for lightweight test daemons."""
-
-        if not hasattr(self, "display_outage"):
-            self.display_outage = None
-        if not hasattr(self, "next_display_outage_id"):
-            self.next_display_outage_id = 1
-        if not hasattr(self, "display_fault"):
-            self.display_fault = None
-        if not hasattr(self, "next_display_fault_id"):
-            self.next_display_fault_id = 1
-        if not hasattr(self, "display_recovery_lock"):
-            self.display_recovery_lock = asyncio.Lock()
-        if not hasattr(self, "supervisor_tasks"):
-            self.supervisor_tasks = set()
-        if not hasattr(self, "failure_history"):
-            self.failure_history = {}
-        if not hasattr(self, "spawn_backoff_until"):
-            self.spawn_backoff_until = {}
-        if not hasattr(self, "spawn_retry_tasks"):
-            self.spawn_retry_tasks = {}
-        if not hasattr(self, "quarantined"):
-            self.quarantined = set()
-        if not hasattr(self, "quarantine_times"):
-            self.quarantine_times = {}
-        if not hasattr(self, "stop_requests"):
-            self.stop_requests = set()
-
     @staticmethod
     def _provides_display_output(component: Component) -> bool:
         return any(
@@ -4276,7 +4200,6 @@ class Msysd:
         reason: str,
         dropped_applications: list[str] | None = None,
     ) -> dict[str, Any]:
-        self._ensure_display_recovery_runtime()
         record = {
             "schema": DISPLAY_OUTPUT_RECOVERED_SCHEMA,
             "id": self.next_display_fault_id,
@@ -4311,7 +4234,6 @@ class Msysd:
         failures: list[dict[str, str]] | None = None,
         fault_id: int | None = None,
     ) -> dict[str, Any] | None:
-        self._ensure_display_recovery_runtime()
         record = self.display_fault
         if (
             record is None
@@ -4394,7 +4316,6 @@ class Msysd:
     def _display_outage_blocks(self, component: Component) -> bool:
         """Return whether an inherited X11 client must wait for its provider."""
 
-        self._ensure_display_recovery_runtime()
         outage = self.display_outage
         if outage is None or not self._inherits_visual_session(component):
             return False
@@ -4435,7 +4356,6 @@ class Msysd:
     ) -> dict[str, Any] | None:
         """Snapshot the visual session before releasing a failed provider lease."""
 
-        self._ensure_display_recovery_runtime()
         if self.stopping or not self._owns_active_display_output(provider):
             return None
         candidates = {
@@ -4553,7 +4473,6 @@ class Msysd:
     ) -> dict[str, Any] | None:
         """Classify an unexpected provider failure before touching X clients."""
 
-        self._ensure_display_recovery_runtime()
         if self.stopping or not self._owns_active_display_output(provider):
             return None
         if self.display_outage is not None:
@@ -4587,7 +4506,6 @@ class Msysd:
         unexpected X server loss.
         """
 
-        self._ensure_display_recovery_runtime()
         async with self.display_recovery_lock:
             affected = list(dict.fromkeys([
                 *outage["consumers"],
@@ -4633,7 +4551,6 @@ class Msysd:
     async def _recover_display_consumers(self, provider: Instance) -> None:
         """Recover only the clients authorized by the outage policy."""
 
-        self._ensure_display_recovery_runtime()
         async with self.display_recovery_lock:
             outage = self.display_outage
             if (
@@ -4720,7 +4637,6 @@ class Msysd:
         self,
         provider: Instance,
     ) -> asyncio.Task[Any] | None:
-        self._ensure_display_recovery_runtime()
         if (
             self.display_outage is None
             or not provider.ready
@@ -4746,7 +4662,6 @@ class Msysd:
         return json.loads(json.dumps(record, ensure_ascii=False))
 
     def _display_migration_status(self, migration_id: int | None = None) -> dict[str, Any]:
-        self._ensure_display_migration_runtime()
         selected = migration_id
         if selected is None:
             selected = self.display_migration_active
@@ -4788,7 +4703,6 @@ class Msysd:
         preference_mode: str,
         source: str,
     ) -> dict[str, Any]:
-        self._ensure_display_migration_runtime()
         async with self.catalog_lock:
             self.role_registry.get_candidate(DISPLAY_OUTPUT_ROLE, provider)
             if preference_mode == "reset":
@@ -4847,7 +4761,6 @@ class Msysd:
         role_lock = self.role_locks.setdefault(DISPLAY_OUTPUT_ROLE, asyncio.Lock())
         async with role_lock:
             async with self.reload_lock:
-                self._ensure_display_recovery_runtime()
                 record = self.display_migrations[migration_id]
                 self.display_migration_active = migration_id
                 record["queued"] = False
@@ -6120,7 +6033,7 @@ class Msysd:
                 ),
             }
         if method == "isolation_capabilities":
-            capabilities = detect_capabilities(self._seccomp_helper())
+            capabilities = self._runtime_isolation_capabilities()
             return {
                 "type": "return",
                 "id": msg.get("id", 0),
@@ -6191,128 +6104,6 @@ class Msysd:
                 },
             }
         return {"type": "error", "id": msg.get("id", 0), "code": "NO_METHOD", "message": str(method)}
-
-    async def _x11_window_policy_call(self, msg: dict[str, Any]) -> dict[str, Any] | None:
-        method = str(msg.get("method", ""))
-        request_id = msg.get("id", 0)
-        if method not in {"list_windows", "recents", "close_active", "back", "home"}:
-            return None
-        if method == "home":
-            return await self._core_call({
-                "type": "call",
-                "id": request_id,
-                "method": "activate_role",
-                "payload": {"role": "launcher"},
-                **(
-                    {"deadline_ms": msg["deadline_ms"]}
-                    if "deadline_ms" in msg
-                    else {}
-                ),
-            }, source="msys.core")
-        display = self._session_display()
-        env = os.environ.copy()
-        env["DISPLAY"] = display
-
-        def run_x(argv: list[str], timeout: float = 3.0) -> subprocess.CompletedProcess[str]:
-            return subprocess.run(argv, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
-
-        def windows_from_tree(text: str) -> list[dict[str, str]]:
-            windows: list[dict[str, str]] = []
-            system_prefixes = (
-                "MSYS Chrome",
-                "MSYS Launcher",
-                "MSYS Navigation",
-                "MSYS Notifications",
-                "MSYS Recents",
-                "MSYS Screen Shield",
-                "msys-notification-host",
-                "msys-task-switcher-host",
-            )
-            for line in text.splitlines():
-                stripped = line.strip()
-                if not stripped.startswith("0x") or '"' not in stripped:
-                    continue
-                xid = stripped.split(None, 1)[0]
-                title = stripped.split('"', 2)[1]
-                if not title or title.startswith("has no name"):
-                    continue
-                if any(title.startswith(prefix) for prefix in system_prefixes):
-                    continue
-                windows.append({"id": xid, "title": title})
-            return windows
-
-        try:
-            tree = await asyncio.to_thread(run_x, ["xwininfo", "-root", "-tree"])
-            raw_windows = windows_from_tree(tree.stdout)
-            managed = self._foreground_entries()
-            if method in {"list_windows", "recents"}:
-                managed_titles = {str(item.get("title", "")) for item in managed}
-                external = [window for window in raw_windows if window["title"] not in managed_titles]
-                return {"type": "return", "id": request_id, "payload": {"windows": [*managed, *external]}}
-            if method == "back":
-                navigation = await self._core_call({
-                    "type": "call",
-                    "id": request_id,
-                    "method": "navigation_back",
-                    "payload": {},
-                    **(
-                        {"deadline_ms": msg["deadline_ms"]}
-                        if "deadline_ms" in msg
-                        else {}
-                    ),
-                }, source="msys.core")
-                navigation_payload = navigation.get("payload", {})
-                if (
-                    navigation.get("type") == "return"
-                    and isinstance(navigation_payload, dict)
-                    and navigation_payload.get("handled") is True
-                ):
-                    return {
-                        "type": "return",
-                        "id": request_id,
-                        "payload": {
-                            "ok": True,
-                            "destination": "application",
-                            "application_navigation": navigation_payload,
-                        },
-                    }
-                # Without the selected policy there is no safe in-process X11
-                # minimize primitive here. Never regress Back into stop/xkill.
-                return {
-                    "type": "return",
-                    "id": request_id,
-                    "payload": {
-                        "ok": False,
-                        "reason": "window-policy-required-for-safe-back",
-                        "application_navigation": navigation_payload,
-                    },
-                }
-            if method == "close_active":
-                if managed:
-                    key = managed[0]["component"]
-                    await self.stop_component(key)
-                    return {
-                        "type": "return",
-                        "id": request_id,
-                        "payload": {"ok": True, "closed_component": key},
-                    }
-                if not raw_windows:
-                    return {"type": "return", "id": request_id, "payload": {"ok": False, "reason": "no-user-window"}}
-                window = raw_windows[0]
-                result = await asyncio.to_thread(run_x, ["xkill", "-id", window["id"]])
-                return {
-                    "type": "return",
-                    "id": request_id,
-                    "payload": {
-                        "ok": result.returncode == 0,
-                        "closed": window["id"],
-                        "title": window["title"],
-                        "stderr": result.stderr.strip(),
-                    },
-                }
-        except Exception as exc:
-            return {"type": "error", "id": request_id, "code": "X11_WINDOW_POLICY_ERROR", "message": str(exc)}
-        return None
 
     async def broadcast(self, topic: str, payload: Any, source: str) -> None:
         if not valid_event_topic(topic):

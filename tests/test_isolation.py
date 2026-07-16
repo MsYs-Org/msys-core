@@ -181,6 +181,7 @@ class IsolationPlanningTests(unittest.TestCase):
     def test_core_exposes_read_only_capability_probe(self) -> None:
         daemon = object.__new__(Msysd)
         daemon.profile = {}
+        daemon._isolation_capabilities = None
         response = asyncio.run(daemon._core_call({
             "type": "call",
             "id": 42,

@@ -109,6 +109,7 @@ class MigrationDaemon(Msysd):
         self.spawn_backoff_until: dict[str, float] = {}
         self.spawn_retry_tasks: dict[str, asyncio.Task[Any]] = {}
         self.quarantined: set[str] = set()
+        self.quarantine_times: dict[str, float] = {}
         self.stop_requests: set[str] = set()
         self.start_locks: dict[str, asyncio.Lock] = {}
         self.stopping = False
@@ -116,6 +117,11 @@ class MigrationDaemon(Msysd):
         self.display_migrations: dict[int, dict[str, Any]] = {}
         self.display_migration_active: int | None = None
         self.display_migration_tasks: dict[int, asyncio.Task[Any]] = {}
+        self.display_outage: dict[str, Any] | None = None
+        self.next_display_outage_id = 1
+        self.display_fault: dict[str, Any] | None = None
+        self.next_display_fault_id = 1
+        self.display_recovery_lock = asyncio.Lock()
         self.actions: list[tuple[str, str, str | None]] = []
         self.events: list[tuple[str, dict[str, Any]]] = []
         self.persisted: list[dict[str, str]] = []

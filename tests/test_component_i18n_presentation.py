@@ -66,6 +66,7 @@ class ComponentI18nPresentationTests(unittest.TestCase):
         daemon.instances = {}
         daemon.foreground_stack = []
         daemon.profile = {"env": {}}
+        daemon._presentation_catalogs = None
         return daemon, loaded.key
 
     @staticmethod

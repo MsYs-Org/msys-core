@@ -23,9 +23,6 @@ class FakeRoleDaemon:
         self.forwarded: list[str] = []
         self.stopped: list[str] = []
         self.actions: list[str] = []
-        self.fallback_calls: list[str] = []
-        self.fallback_response = None
-        self.profile = {"env": {}}
 
     async def _announce_foreground_closing(self):
         self.actions.append("closing")
@@ -42,13 +39,6 @@ class FakeRoleDaemon:
 
     async def stop_component(self, key: str, *, expected=None) -> None:
         self.stopped.append(key)
-
-    async def _x11_window_policy_call(self, msg):
-        self.fallback_calls.append(str(msg.get("method", "")))
-        return self.fallback_response
-
-    def _session_display(self):
-        return ":24"
 
 
 class RoleDispatchContractTests(unittest.IsolatedAsyncioTestCase):
@@ -191,7 +181,6 @@ class RoleDispatchContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["code"], "OUTCOME_UNKNOWN")
         self.assertEqual(daemon.forwarded, ["provider-0"])
         self.assertEqual(daemon.actions, ["closing", "forward"])
-        self.assertEqual(daemon.fallback_calls, [])
 
     async def test_back_does_not_announce_a_close_before_backgrounding(self) -> None:
         daemon = FakeRoleDaemon([
@@ -206,47 +195,6 @@ class RoleDispatchContractTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response["type"], "return")
         self.assertEqual(daemon.actions, ["forward"])
-        self.assertEqual(daemon.fallback_calls, [])
-
-    async def test_missing_policy_uses_marked_core_control_fallback(self) -> None:
-        daemon = FakeRoleDaemon([])
-        daemon.fallback_response = {
-            "type": "return",
-            "id": 12,
-            "payload": {"windows": []},
-        }
-
-        with mock.patch("builtins.print") as output:
-            response = await Msysd._dispatch_role_call(
-                daemon,
-                {"type": "call", "id": 12, "target": "role:window-manager", "method": "recents"},
-                source="task-switcher",
-            )
-
-        self.assertTrue(response["fallback"])
-        self.assertTrue(response["payload"]["fallback"])
-        self.assertEqual(daemon.fallback_calls, ["recents"])
-        self.assertIn("core X11 control fallback", output.call_args.args[0])
-
-    async def test_definite_provider_error_can_use_control_fallback(self) -> None:
-        daemon = FakeRoleDaemon([
-            {"type": "error", "id": 13, "code": "NO_METHOD", "message": "recents"},
-        ])
-        daemon.fallback_response = {
-            "type": "return",
-            "id": 13,
-            "payload": {"windows": []},
-        }
-
-        response = await Msysd._dispatch_role_call(
-            daemon,
-            {"type": "call", "id": 13, "target": "role:window-manager", "method": "recents"},
-            source="task-switcher",
-        )
-
-        self.assertTrue(response["payload"]["fallback"])
-        self.assertEqual(daemon.forwarded, ["provider-0"])
-        self.assertEqual(daemon.fallback_calls, ["recents"])
 
     async def test_read_only_timeout_can_fail_over(self) -> None:
         daemon = FakeRoleDaemon([
@@ -260,7 +208,6 @@ class RoleDispatchContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response["type"], "return")
         self.assertEqual(daemon.forwarded, ["provider-0", "provider-1"])
-        self.assertEqual(daemon.fallback_calls, [])
 
     async def test_successful_forward_trace_requires_debug_flag(self) -> None:
         class CaptureSocket:
