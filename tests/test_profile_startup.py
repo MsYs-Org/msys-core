@@ -204,7 +204,7 @@ class ProfileStartupTests(unittest.TestCase):
                     "Noto Sans CJK SC",
                 )
 
-    def test_all_profiles_use_one_native_hal_with_lazy_python_fallback(self) -> None:
+    def test_reference_profiles_use_one_native_hal(self) -> None:
         config = Path(__file__).resolve().parents[1] / "examples" / "config"
         for profile_id in (
             "desktop-hdmi",
@@ -216,10 +216,12 @@ class ProfileStartupTests(unittest.TestCase):
         ):
             with self.subTest(profile=profile_id):
                 daemon = Msysd(config, Path("/tmp/msys-profile-test"), profile_id)
-                self.assertEqual(
-                    daemon.profile["roles"]["hal-manager"],
-                    [NATIVE_HAL, PYTHON_HAL],
+                expected = (
+                    [NATIVE_HAL]
+                    if profile_id == "mobile-spi"
+                    else [NATIVE_HAL, PYTHON_HAL]
                 )
+                self.assertEqual(daemon.profile["roles"]["hal-manager"], expected)
                 self.assertEqual(daemon.profile["startup"].count(NATIVE_HAL), 1)
                 self.assertNotIn(PYTHON_HAL, daemon.profile["startup"])
                 self.assertTrue(starts_at_profile_boot(daemon, NATIVE_HAL))
@@ -243,8 +245,11 @@ class ProfileStartupTests(unittest.TestCase):
                 self.assertTrue(starts_at_profile_boot(daemon, NATIVE_SHELL))
                 for role, pyside_fallback in NATIVE_ROLES.items():
                     candidates = profile["roles"][role]
-                    self.assertEqual(candidates[0], NATIVE_SHELL, role)
-                    self.assertIn(pyside_fallback, candidates, role)
+                    if profile_id == "mobile-spi":
+                        self.assertEqual(candidates, [NATIVE_SHELL], role)
+                    else:
+                        self.assertEqual(candidates[0], NATIVE_SHELL, role)
+                        self.assertIn(pyside_fallback, candidates, role)
                     self.assertFalse(
                         starts_at_profile_boot(daemon, pyside_fallback),
                         pyside_fallback,
@@ -253,6 +258,31 @@ class ProfileStartupTests(unittest.TestCase):
                     self.assertEqual(profile["roles"][role][0], pyside_provider)
                     self.assertEqual(daemon.components[pyside_provider].lifecycle, "on-demand")
                     self.assertFalse(starts_at_profile_boot(daemon, pyside_provider))
+
+    def test_default_mobile_profile_keeps_only_unique_pyside_roles(self) -> None:
+        config = Path(__file__).resolve().parents[1] / "examples" / "config"
+        daemon = Msysd(config, Path("/tmp/msys-profile-test"), "mobile-spi")
+        roles = daemon.profile["roles"]
+
+        self.assertEqual(roles["hal-manager"], [NATIVE_HAL])
+        self.assertEqual(
+            roles["chooser"],
+            ["org.msys.shell.pyside:intent-chooser"],
+        )
+        self.assertEqual(
+            roles["screen-shield"],
+            ["org.msys.shell.pyside:screen-shield"],
+        )
+        self.assertEqual(
+            roles["transition-presenter"],
+            ["org.msys.shell.pyside:transitions"],
+        )
+        for fallback in (*NATIVE_ROLES.values(), PYTHON_HAL):
+            self.assertIn(fallback, daemon.components)
+            self.assertNotIn(
+                fallback,
+                {candidate for candidates in roles.values() for candidate in candidates},
+            )
 
     def test_pill_profile_keeps_pyside_pill_as_first_dormant_fallback(self) -> None:
         config = Path(__file__).resolve().parents[1] / "examples" / "config"

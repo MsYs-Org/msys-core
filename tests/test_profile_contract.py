@@ -149,13 +149,10 @@ class ProfileLoadingTests(unittest.TestCase):
             with self.subTest(profile_id=profile_id):
                 profile = load_profile(config, profile_id)
                 self.assertEqual(profile["id"], profile_id)
-                self.assertEqual(
-                    profile["roles"]["hal-manager"],
-                    [
-                        "org.msys.hal.linux:native-manager",
-                        "org.msys.hal.linux:manager",
-                    ],
-                )
+                expected_hal = ["org.msys.hal.linux:native-manager"]
+                if profile_id != "mobile-spi":
+                    expected_hal.append("org.msys.hal.linux:manager")
+                self.assertEqual(profile["roles"]["hal-manager"], expected_hal)
                 self.assertIn("org.msys.hal.linux:native-manager", profile["startup"])
                 self.assertNotIn("org.msys.hal.linux:manager", profile["startup"])
 
@@ -168,6 +165,7 @@ class ProfileLoadingTests(unittest.TestCase):
             "navigation-bar",
             "task-switcher",
             "notification-presenter",
+            "notification-center",
         )
         for profile_id in (
             "mobile-spi",
@@ -181,6 +179,8 @@ class ProfileLoadingTests(unittest.TestCase):
                 self.assertEqual(profile["startup"].count(native), 1)
                 for role in native_roles:
                     self.assertEqual(profile["roles"][role][0], native)
+                    if profile_id == "mobile-spi":
+                        self.assertEqual(profile["roles"][role], [native])
 
         kiosk = load_profile(config, "kiosk-spi")
         self.assertNotIn(native, kiosk["startup"])

@@ -1,6 +1,14 @@
 # msys-core
 
-Current source version: `0.1.24`.
+Current source version: `0.1.25`.
+
+Version 0.1.25 makes the default `mobile-spi` profile explicitly name only the
+providers the deployed system actually uses. Native Shell is its sole listed
+choice for launcher, chrome, navigation, tasks, notifications, and the
+notification center; native HAL is its sole listed HAL manager. This removes
+dormant duplicate fallback entries from the default policy without deleting
+replaceable role contracts or optional reference packages. The PySide-only
+chooser, screen shield, and transition presenter remain available on demand.
 
 Version 0.1.24 extends the bounded process inventory with the strict
 `scope: "all-msys"` selection. It includes every live supervised MSYS
@@ -173,20 +181,22 @@ silently selecting a discovered fallback provider.
 The mobile and desktop profiles consolidate `launcher`, `system-chrome`,
 `navigation-bar`, `task-switcher`, and `notification-presenter` into the one C
 component `org.msys.shell.native:desktop-shell`. It is listed first for each
-role and appears once in profile startup, so the former PySide launcher,
-chrome, and navigation interpreters stay dormant. Their providers remain later
-candidates for explicit fallback. PySide roles not implemented by the native
-phase (`transition-presenter`, `notification-center`, and `chooser`) remain
-lazy and are activated only by role calls; input method is likewise lazy.
-Kiosk keeps HAL available to its single application and does not add native or
-PySide shell UI.
+role and appears once in profile startup. The default `mobile-spi` policy lists
+that native component as its only explicit choice for every role it implements,
+including `notification-center`; it does not pin redundant PySide fallbacks.
+Other reference profiles retain their compatibility lists as examples.
+PySide-only roles (`transition-presenter`, `screen-shield`, and `chooser`)
+remain lazy in `mobile-spi` and are activated only by role calls; the input
+method is likewise lazy. Role contracts and provider discovery remain
+replaceable, so a user may select an installed alternative without making it
+part of the default policy. Kiosk keeps HAL available to its single application
+and does not add native or PySide shell UI.
 
-All six reference profiles likewise select
-`org.msys.hal.linux:native-manager` as the sole resident HAL manager. The
-Python `org.msys.hal.linux:manager` stays second in the role candidate list and
-is on-demand, so it remains a compatibility fallback without consuming idle
-memory. This applies to kiosk as well as interactive profiles. The generated
-HAL development fallback resolves its native executable at
+All six reference profiles select `org.msys.hal.linux:native-manager` as the
+sole resident HAL manager. The default `mobile-spi` profile also makes it the
+sole explicitly listed HAL choice. Other example profiles retain the on-demand
+Python manager as a compatibility entry, but it consumes no idle memory. The
+generated HAL development fallback resolves its native executable at
 `/opt/msys-dev/msys-hal/files/bin/msys-hal-native`, rather than treating the
 Core manifest directory as the package root.
 

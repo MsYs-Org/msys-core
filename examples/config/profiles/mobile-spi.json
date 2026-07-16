@@ -3,27 +3,22 @@
     "id":  "mobile-spi",
     "roles":  {
                   "launcher":  [
-                                   "org.msys.shell.native:desktop-shell",
-                                   "org.msys.shell.pyside:launcher"
+                                   "org.msys.shell.native:desktop-shell"
                                ],
                   "system-chrome":  [
-                                        "org.msys.shell.native:desktop-shell",
-                                        "org.msys.shell.pyside:chrome"
+                                        "org.msys.shell.native:desktop-shell"
                                     ],
                   "window-policy":  [
                                         "org.msys.x11.session:window-policy"
                                     ],
                   "notification-presenter":  [
-                                                 "org.msys.shell.native:desktop-shell",
-                                                 "org.msys.shell.pyside:notifications"
+                                                 "org.msys.shell.native:desktop-shell"
                                              ],
                   "notification-center":  [
-                                              "org.msys.shell.native:desktop-shell",
-                                              "org.msys.shell.pyside:notification-center"
+                                              "org.msys.shell.native:desktop-shell"
                                           ],
                   "task-switcher":  [
-                                        "org.msys.shell.native:desktop-shell",
-                                        "org.msys.shell.pyside:task-switcher"
+                                        "org.msys.shell.native:desktop-shell"
                                     ],
                   "chooser":  [
                                   "org.msys.shell.pyside:intent-chooser"
@@ -35,8 +30,7 @@
                                                  "org.msys.shell.pyside:transitions"
                                              ],
                   "hal-manager":  [
-                                       "org.msys.hal.linux:native-manager",
-                                       "org.msys.hal.linux:manager"
+                                       "org.msys.hal.linux:native-manager"
                                    ],
                   "input-method":  [
                                         "org.msys.input.touch:keyboard"
@@ -54,9 +48,7 @@
                                          "org.msys.openstick.ch347:x11-spi-touch-output"
                                      ],
                   "navigation-bar":  [
-                                         "org.msys.shell.native:desktop-shell",
-                                         "org.msys.shell.pyside:navigation",
-                                         "org.msys.shell.pyside:navigation-pill"
+                                         "org.msys.shell.native:desktop-shell"
                                      ],
                   "window-manager":  [
                                          "org.msys.x11.session:window-policy"
